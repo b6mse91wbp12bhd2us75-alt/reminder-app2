@@ -23,28 +23,61 @@ jobs:
       - name: Build Web Assets
         run: npm run build
 
-      - name: Set up Java 17
+      - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Configure Android SDK and Permissions
+      - name: Prepare Android Project
         run: |
           echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-          chmod -R +x android
+          
+          # 欠落しているCordovaダミーフォルダを自動生成
+          if [ ! -d "android/capacitor-cordova-android-plugins" ]; then
+            mkdir -p android/capacitor-cordova-android-plugins/src/main/libs
+            cat << 'EOF' > android/capacitor-cordova-android-plugins/build.gradle
+          ext {
+              androidxAppCompatVersion = '1.7.1'
+              cordovaAndroidVersion = '14.0.1'
+          }
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.13.0' }
+          }
+          apply plugin: 'com.android.library'
+          android {
+              namespace = "capacitor.cordova.android.plugins"
+              compileSdk = 34
+              defaultConfig { minSdkVersion 22; targetSdkVersion 34 }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_21
+                  targetCompatibility JavaVersion.VERSION_21
+              }
+          }
+          repositories { google(); mavenCentral() }
+          dependencies { implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion" }
+          EOF
+            cat << 'EOF' > android/capacitor-cordova-android-plugins/cordova.variables.gradle
+          ext { cdvPluginPostBuildExtras = [] }
+          EOF
+            cat << 'EOF' > android/capacitor-cordova-android-plugins/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="capacitor.cordova.android.plugins"/>
+          EOF
+          fi
 
-      - name: Sync Web Assets to Android
-        run: |
+          # Webアセットを配置してCapacitorを同期
           mkdir -p android/app/src/main/assets/public
           cp -r dist/* android/app/src/main/assets/public/
           npx --yes @capacitor/cli sync android || ./node_modules/.bin/cap sync android || true
 
+          # 実行権限を付与
+          chmod -R +x android
+
       - name: Build Android Debug APK
         run: |
           cd android
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
