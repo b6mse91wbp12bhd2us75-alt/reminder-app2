@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2d3748" />
+      <stop offset="100%" stop-color="#1a202c" />
+    </linearGradient>
+    <linearGradient id="bellGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#60a5fa" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background with squircle/rounded rect -->
+  <rect width="512" height="512" rx="115" fill="url(#bg)" />
+
+  <!-- Outer subtle ring -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#3b82f6" stroke-width="4" stroke-opacity="0.3" stroke-dasharray="8 8" />
+
+  <!-- Bell Clapper / Top Handle -->
+  <circle cx="256" cy="140" r="28" fill="url(#glow)" />
+  <circle cx="256" cy="140" r="16" fill="#1a202c" />
+
+  <!-- Main Bell Body -->
+  <path d="M160 330 C160 210, 200 170, 256 170 C312 170, 352 210, 352 330 L380 360 C388 368, 384 380, 372 380 L140 380 C128 380, 124 368, 132 360 Z" fill="url(#bellGrad)" />
+
+  <!-- Bell rim highlight -->
+  <path d="M132 374 C132 370, 380 370, 380 374 L372 380 L140 380 Z" fill="#93c5fd" opacity="0.8" />
+
+  <!-- Bell Clapper Ball -->
+  <circle cx="256" cy="396" r="30" fill="url(#glow)" />
+
+  <!-- Sound wave indicators -->
+  <path d="M395 230 C415 250, 415 280, 395 300" fill="none" stroke="#fbbf24" stroke-width="12" stroke-linecap="round" />
+  <path d="M117 230 C97 250, 97 280, 117 300" fill="none" stroke="#fbbf24" stroke-width="12" stroke-linecap="round" />
+</svg>

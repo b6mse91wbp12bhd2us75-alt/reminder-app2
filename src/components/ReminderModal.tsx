@@ -1,0 +1,795 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { ReminderItem, NoticeOption } from '../types/reminder';
+import { PRESET_SOUNDS, previewSound, stopAlarmSound } from '../services/audio';
+import { padZero } from '../utils/dateUtils';
+import { NumberStepper } from './NumberStepper';
+import { X, Calendar, Bell, Volume2, Plus, Play, Square, Upload, Clock, RefreshCw, Trash2, Check } from 'lucide-react';
+import { User } from 'firebase/auth';
+
+interface ReminderModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (reminder: ReminderItem) => Promise<void>;
+  targetItem: ReminderItem | null;
+  user: User | null;
+  onGoogleSignIn: () => Promise<void>;
+  customSounds?: { name: string; url: string }[];
+  onAddCustomSounds?: (sounds: { name: string; url: string }[]) => void;
+  onDeleteCustomSound?: (name: string) => void;
+}
+
+export const ReminderModal: React.FC<ReminderModalProps> = ({
+  isOpen,
+  onClose,
+  onSave,
+  targetItem,
+  user,
+  onGoogleSignIn,
+  customSounds = [],
+  onAddCustomSounds,
+  onDeleteCustomSound,
+}) => {
+  const [title, setTitle] = useState('');
+  const [memo, setMemo] = useState('');
+  const [syncWithGoogle, setSyncWithGoogle] = useState(true);
+
+  // Date/Time parts
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear().toString());
+  const [month, setMonth] = useState(padZero(now.getMonth() + 1));
+  const [day, setDay] = useState(padZero(now.getDate()));
+  const [hour, setHour] = useState(padZero(now.getHours()));
+  const [minute, setMinute] = useState(padZero(now.getMinutes()));
+
+  // Repeat
+  const [repeatType, setRepeatType] = useState('なし');
+  const [intervalDays, setIntervalDays] = useState('2');
+
+  // Snooze and duration
+  const [snoozeMin, setSnoozeMin] = useState('5');
+  const [durationSec, setDurationSec] = useState('5');
+
+  // Advance notices
+  const [notices, setNotices] = useState<NoticeOption[]>([]);
+
+  // Sound
+  const [sound, setSound] = useState<string>(PRESET_SOUNDS[0].name);
+  const [customSoundUrl, setCustomSoundUrl] = useState<string | undefined>(undefined);
+  const [customSoundName, setCustomSoundName] = useState<string | undefined>(undefined);
+  const [isPlayingTest, setIsPlayingTest] = useState(false);
+  const [soundFeedback, setSoundFeedback] = useState<string | null>(null);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Initialize or reset form
+  useEffect(() => {
+    if (!isOpen) {
+      stopAlarmSound();
+      setIsPlayingTest(false);
+      return;
+    }
+
+    const currentNow = new Date();
+
+    if (targetItem) {
+      setTitle(targetItem.title || '');
+      setMemo(targetItem.memo || '');
+      setSyncWithGoogle(!!targetItem.google_event_id);
+      setSound(targetItem.sound || PRESET_SOUNDS[0].name);
+      setCustomSoundUrl(targetItem.custom_sound_url);
+      setCustomSoundName(targetItem.custom_sound_name);
+      setSnoozeMin(targetItem.snooze_min ? targetItem.snooze_min.toString() : '5');
+      setDurationSec(targetItem.duration !== undefined ? targetItem.duration.toString() : '5');
+
+      // Parse target_time: YYYY-MM-DD HH:mm
+      if (targetItem.target_time) {
+        const [dPart, tPart] = targetItem.target_time.split(' ');
+        if (dPart && tPart) {
+          const [y, m, d] = dPart.split('-');
+          const [h, mi] = tPart.split(':');
+          setYear(y);
+          setMonth(m);
+          setDay(d);
+          setHour(h);
+          setMinute(mi);
+        }
+      }
+
+      // Repeat
+      if (targetItem.repeat) {
+        if (targetItem.repeat.includes('日おき')) {
+          setRepeatType('〇日おき');
+          const num = targetItem.repeat.replace('日おき', '').trim();
+          setIntervalDays(num || '2');
+        } else {
+          setRepeatType(targetItem.repeat);
+        }
+      } else {
+        setRepeatType('なし');
+      }
+
+      // Parse notices
+      if (targetItem.notices && targetItem.notices !== 'なし') {
+        const parsedList: NoticeOption[] = [];
+        const parts = targetItem.notices.split(',');
+        parts.forEach((p, idx) => {
+          const trimmed = p.trim();
+          for (const u of ['分前', '時間前', '日前', '週間前'] as const) {
+            if (trimmed.includes(u)) {
+              const val = parseFloat(trimmed.replace(u, '')) || 1;
+              parsedList.push({
+                id: `notice-${idx}-${Date.now()}`,
+                value: val,
+                unit: u,
+              });
+              break;
+            }
+          }
+        });
+        setNotices(parsedList.length > 0 ? parsedList : [{ id: 'n1', value: 1, unit: '日前' }]);
+      } else {
+        setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+      }
+    } else {
+      // New reminder defaults
+      setTitle('');
+      setMemo('');
+      setSyncWithGoogle(false);
+      setSound(PRESET_SOUNDS[0].name);
+      setCustomSoundUrl(undefined);
+      setCustomSoundName(undefined);
+      setRepeatType('なし');
+      setIntervalDays('2');
+      setSnoozeMin('5');
+      setDurationSec('5');
+      setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+
+      // Default to CURRENT EXACT TIME
+      setYear(currentNow.getFullYear().toString());
+      setMonth(padZero(currentNow.getMonth() + 1));
+      setDay(padZero(currentNow.getDate()));
+      setHour(padZero(currentNow.getHours()));
+      setMinute(padZero(currentNow.getMinutes()));
+    }
+  }, [isOpen, targetItem, user]);
+
+  if (!isOpen) return null;
+
+  // Year options: current year to +6 years
+  const currentYearNum = now.getFullYear();
+  const yearOptions = Array.from({ length: 7 }, (_, i) => (currentYearNum + i).toString());
+  const monthOptions = Array.from({ length: 12 }, (_, i) => padZero(i + 1));
+  const dayOptions = Array.from({ length: 31 }, (_, i) => padZero(i + 1));
+  const hourOptions = Array.from({ length: 24 }, (_, i) => padZero(i));
+  const minuteOptions = Array.from({ length: 60 }, (_, i) => padZero(i));
+
+  // Quick date presets
+  const applyQuickDate = (type: 'today' | 'tomorrow' | 'weekend' | 'nextWeek') => {
+    const d = new Date();
+    if (type === 'tomorrow') {
+      d.setDate(d.getDate() + 1);
+    } else if (type === 'weekend') {
+      const dayOfWeek = d.getDay();
+      const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
+      d.setDate(d.getDate() + daysUntilSaturday);
+    } else if (type === 'nextWeek') {
+      d.setDate(d.getDate() + 7);
+    }
+    setYear(d.getFullYear().toString());
+    setMonth(padZero(d.getMonth() + 1));
+    setDay(padZero(d.getDate()));
+  };
+
+  // Quick timer preset (now, +5m, +10m, +15m, +30m, +1h from current exact time)
+  const setQuickTimer = (mins: number) => {
+    const d = new Date();
+    if (mins > 0) {
+      d.setMinutes(d.getMinutes() + mins);
+    }
+    setYear(d.getFullYear().toString());
+    setMonth(padZero(d.getMonth() + 1));
+    setDay(padZero(d.getDate()));
+    setHour(padZero(d.getHours()));
+    setMinute(padZero(d.getMinutes()));
+  };
+
+
+  const handleAddNotice = () => {
+    setNotices((prev) => [
+      ...prev,
+      {
+        id: `notice-${Date.now()}-${Math.random()}`,
+        value: 1,
+        unit: '日前',
+      },
+    ]);
+  };
+
+  const handleRemoveNotice = (id: string) => {
+    setNotices((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  const handleNoticeChange = (id: string, field: 'value' | 'unit', val: any) => {
+    setNotices((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, [field]: val } : n))
+    );
+  };
+
+  const handleTestSound = () => {
+    if (isPlayingTest) {
+      stopAlarmSound();
+      setIsPlayingTest(false);
+    } else {
+      setIsPlayingTest(true);
+      previewSound(sound, customSoundUrl);
+      setTimeout(() => {
+        setIsPlayingTest(false);
+      }, 3500);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const newSounds: { name: string; url: string }[] = [];
+    let processed = 0;
+
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        newSounds.push({
+          name: file.name,
+          url: base64,
+        });
+        processed++;
+        if (processed === files.length) {
+          if (onAddCustomSounds) {
+            onAddCustomSounds(newSounds);
+          }
+          const latest = newSounds[newSounds.length - 1];
+          setSound(latest.name);
+          setCustomSoundUrl(latest.url);
+          setCustomSoundName(latest.name);
+          setSoundFeedback(`${files.length}件の音源を追加しました！`);
+          setTimeout(() => setSoundFeedback(null), 3500);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset input so same file can be selected again if needed
+    e.target.value = '';
+  };
+
+  const handleDeleteSelectedCustomSound = () => {
+    if (!onDeleteCustomSound) return;
+    const isCustom = customSounds.some((cs) => cs.name === sound);
+    if (!isCustom) return;
+
+    if (window.confirm(`登録音源「${sound}」を削除しますか？\n（この端末から削除されます）`)) {
+      onDeleteCustomSound(sound);
+      setSound(PRESET_SOUNDS[0].name);
+      setCustomSoundUrl(undefined);
+      setCustomSoundName(undefined);
+      setSoundFeedback(`「${sound}」を削除しました。`);
+      setTimeout(() => setSoundFeedback(null), 3000);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) {
+      alert('予定のタイトルを入力してください。');
+      return;
+    }
+
+    const targetTimeStr = `${year}-${month}-${day} ${hour}:${minute}`;
+
+    // Validate repeat
+    let finalRepeat = repeatType;
+    if (repeatType === '〇日おき') {
+      const days = parseInt(intervalDays.trim(), 10);
+      if (isNaN(days) || days <= 0) {
+        alert('〇日おきの間隔には1以上の正の整数を入力してください。');
+        return;
+      }
+      finalRepeat = `${days}日おき`;
+    }
+
+    // Format notices string
+    const validNotices = notices
+      .filter((n) => Number(n.value) > 0)
+      .map((n) => `${Number(n.value)}${n.unit}`);
+    const noticesStr = validNotices.length > 0 ? validNotices.join(', ') : 'なし';
+
+    const reminderData: ReminderItem = {
+      id: targetItem?.id || `rem-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      title: title.trim(),
+      memo: memo.trim(),
+      target_time: targetTimeStr,
+      repeat: finalRepeat,
+      notices: noticesStr,
+      sound,
+      custom_sound_url: customSoundUrl,
+      custom_sound_name: customSoundName,
+      snooze_min: parseInt(snoozeMin, 10) || 5,
+      duration: parseInt(durationSec, 10) >= 0 ? parseInt(durationSec, 10) : 5,
+      google_event_id: syncWithGoogle ? targetItem?.google_event_id : null,
+      sync_with_google: syncWithGoogle,
+      completed_time: targetItem?.completed_time,
+    };
+
+    setIsSubmitting(true);
+    try {
+      await onSave(reminderData);
+      stopAlarmSound();
+      onClose();
+    } catch (err: any) {
+      alert(err.message || '保存に失敗しました');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xs overflow-y-auto">
+      <div className="w-full max-w-[420px] bg-[#2d3748] border border-gray-600 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-white animate-in zoom-in-95 duration-150">
+        {/* Modal Header */}
+        <div className="bg-[#1a202c] px-5 py-3.5 flex items-center justify-between border-b border-gray-700/70 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">{targetItem ? '✏️' : '🔔'}</span>
+            <h3 className="font-bold text-base tracking-wide text-white">
+              {targetItem ? 'リマインダー編集' : 'リマインダー作成'}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Modal Scrollable Form Body */}
+        <form
+          id="reminder-modal-form"
+          onSubmit={handleSubmit}
+          className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-sm"
+        >
+          {/* Title Input - No separate label line, watermarked placeholder */}
+          <div>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="予定のタイトル (例: 病院の予約)"
+              required
+              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-2 text-base font-bold text-white placeholder-gray-400 transition"
+            />
+          </div>
+
+          {/* Memo Input - No separate label line, watermarked placeholder */}
+          <div>
+            <textarea
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              placeholder="メモ (任意) (例: 保険証を忘れない)"
+              rows={2}
+              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-1.5 text-sm text-white placeholder-gray-400 transition resize-none"
+            />
+          </div>
+
+          {/* Google Calendar Sync Checkbox */}
+          <div className="bg-[#3a4a5e]/70 border border-gray-600/70 rounded-xl px-3 py-2 flex items-center justify-between">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-gray-100 select-none">
+              <input
+                type="checkbox"
+                checked={syncWithGoogle}
+                onChange={(e) => setSyncWithGoogle(e.target.checked)}
+                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 bg-gray-700 border-gray-500 cursor-pointer"
+              />
+              <span className="flex items-center gap-1.5">
+                <span>📅</span>
+                <span>この予定をGoogleカレンダーにも送信する</span>
+              </span>
+            </label>
+
+            {syncWithGoogle && !user && (
+              <button
+                type="button"
+                onClick={onGoogleSignIn}
+                className="text-[11px] bg-blue-600 hover:bg-blue-500 text-white font-bold px-2 py-0.5 rounded-lg transition"
+              >
+                連携ログイン
+              </button>
+            )}
+          </div>
+
+          {/* Target Notification Date & Time */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-blue-400" />
+                <span>通知日時</span>
+              </label>
+
+              {/* Quick Preset Buttons */}
+              <div className="flex gap-1 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('today')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  今日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('tomorrow')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  明日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('weekend')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  今週末
+                </button>
+              </div>
+            </div>
+
+            {/* Date and Time Panel */}
+            <div className="bg-[#3a4a5e] border border-gray-600 rounded-xl p-2.5 space-y-2">
+              {/* Date Row */}
+              <div className="flex items-center gap-1.5 text-sm font-bold">
+                <select
+                  value={year}
+                  onChange={(e) => setYear(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {yearOptions.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+                <span className="text-xs">年</span>
+
+                <select
+                  value={month}
+                  onChange={(e) => setMonth(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {monthOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <span className="text-xs">月</span>
+
+                <select
+                  value={day}
+                  onChange={(e) => setDay(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {dayOptions.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+                <span className="text-xs">日</span>
+              </div>
+
+              {/* Time Row */}
+              <div className="flex items-center gap-1.5 text-sm font-bold border-t border-gray-600/50 pt-1.5">
+                <select
+                  value={hour}
+                  onChange={(e) => setHour(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {hourOptions.map((h) => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
+                </select>
+                <span className="mr-3 text-xs">時</span>
+
+                <select
+                  value={minute}
+                  onChange={(e) => setMinute(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {minuteOptions.map((mi) => (
+                    <option key={mi} value={mi}>{mi}</option>
+                  ))}
+                </select>
+                <span className="text-xs">分</span>
+              </div>
+
+              {/* Quick Timer Presets */}
+              <div className="flex items-center gap-1 flex-wrap pt-1.5 border-t border-gray-600/40 text-xs">
+                <span className="text-[10px] text-gray-400 font-bold">設定補助:</span>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(0)}
+                  className="px-2 py-0.5 rounded-md bg-blue-900/60 hover:bg-blue-800 text-blue-200 font-bold text-[11px] cursor-pointer transition border border-blue-500/40"
+                  title="現在時刻にリセット"
+                >
+                  現在時刻
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(5)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +5分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(10)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +10分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(15)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +15分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(30)}
+                  className="px-1.5 py-0.5 rounded-md bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-bold text-[11px] cursor-pointer transition border border-amber-600/40"
+                >
+                  +30分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(60)}
+                  className="px-1.5 py-0.5 rounded-md bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-bold text-[11px] cursor-pointer transition border border-amber-600/40"
+                >
+                  +1時間
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Repeat Setting */}
+          <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1 flex items-center gap-1">
+              <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+              <span>リピート設定</span>
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={repeatType}
+                onChange={(e) => setRepeatType(e.target.value)}
+                className="bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-1.5 text-white font-bold text-xs cursor-pointer"
+              >
+                <option value="なし">なし</option>
+                <option value="毎日">毎日</option>
+                <option value="毎週">毎週</option>
+                <option value="毎月">毎月</option>
+                <option value="毎年">毎年</option>
+                <option value="〇日おき">〇日おき</option>
+              </select>
+
+              {repeatType === '〇日おき' && (
+                <div className="flex items-center gap-1.5 animate-in fade-in">
+                  <NumberStepper
+                    value={parseInt(intervalDays, 10) || 2}
+                    min={1}
+                    max={365}
+                    onChange={(v) => setIntervalDays(v.toString())}
+                    suffix="日おき"
+                    compact
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Snooze & Duration */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="block text-xs font-bold text-gray-300 mb-1">スヌーズ時間</label>
+              <NumberStepper
+                value={parseInt(snoozeMin, 10) || 5}
+                min={1}
+                max={120}
+                onChange={(v) => setSnoozeMin(v.toString())}
+                suffix="分"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-300 mb-1">アラーム鳴動 (0=連続)</label>
+              <NumberStepper
+                value={parseInt(durationSec, 10) >= 0 ? parseInt(durationSec, 10) : 5}
+                min={0}
+                max={300}
+                onChange={(v) => setDurationSec(v.toString())}
+                suffix="秒"
+              />
+            </div>
+          </div>
+
+          {/* Custom Advance Notices */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
+                <Bell className="w-3.5 h-3.5 text-blue-400" />
+                <span>事前通知のカスタム設定</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleAddNotice}
+                className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+                <span>通知を追加</span>
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {notices.map((n) => (
+                <div key={n.id} className="flex items-center gap-1.5 bg-[#3a4a5e] p-1.5 rounded-xl border border-gray-600/60">
+                  <NumberStepper
+                    value={n.value}
+                    min={1}
+                    max={999}
+                    onChange={(v) => handleNoticeChange(n.id, 'value', v)}
+                    compact
+                  />
+                  <select
+                    value={n.unit}
+                    onChange={(e) => handleNoticeChange(n.id, 'unit', e.target.value)}
+                    className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold text-xs cursor-pointer h-8"
+                  >
+                    <option value="分前">分前</option>
+                    <option value="時間前">時間前</option>
+                    <option value="日前">日前</option>
+                    <option value="週間前">週間前</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveNotice(n.id)}
+                    className="p-1.5 rounded-lg bg-red-800/80 hover:bg-red-700 text-red-200 ml-auto cursor-pointer"
+                    title="削除"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              {notices.length === 0 && (
+                <p className="text-[11px] text-gray-400 italic">事前通知なし（時刻ちょうどのみ通知）</p>
+              )}
+            </div>
+          </div>
+
+          {/* Alarm Sound Selection */}
+          <div className="pb-1 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
+                <Volume2 className="w-3.5 h-3.5 text-blue-400" />
+                <span>アラーム音源</span>
+              </label>
+
+              {/* Add Custom MP3 Sound Button */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition cursor-pointer flex items-center gap-1 shadow-xs"
+                title="お手持ちのMP3音源を追加（複数可）"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>音源を追加</span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <select
+                value={sound}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSound(val);
+                  const matched = customSounds.find((cs) => cs.name === val);
+                  if (matched) {
+                    setCustomSoundUrl(matched.url);
+                    setCustomSoundName(matched.name);
+                  } else {
+                    setCustomSoundUrl(undefined);
+                    setCustomSoundName(undefined);
+                  }
+                }}
+                className="flex-1 bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-2 text-white font-bold text-xs cursor-pointer truncate"
+              >
+                <optgroup label="プリセット音源">
+                  {PRESET_SOUNDS.map((ps) => (
+                    <option key={ps.id} value={ps.name}>
+                      {ps.name}
+                    </option>
+                  ))}
+                </optgroup>
+                {customSounds.length > 0 && (
+                  <optgroup label="登録済み音源 (MP3等)">
+                    {customSounds.map((cs) => (
+                      <option key={cs.name} value={cs.name}>
+                        🎵 {cs.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {customSoundName && !customSounds.some((cs) => cs.name === customSoundName) && (
+                  <option value={customSoundName}>
+                    🎵 {customSoundName} (個別音源)
+                  </option>
+                )}
+              </select>
+
+              {/* Play preview test button */}
+              <button
+                type="button"
+                onClick={handleTestSound}
+                className={`p-2 rounded-xl border transition cursor-pointer flex items-center justify-center shrink-0 ${
+                  isPlayingTest
+                    ? 'bg-amber-600 text-white border-amber-500'
+                    : 'bg-[#2d3748] hover:bg-gray-700 text-gray-200 border-gray-600'
+                }`}
+                title="音声をテスト再生"
+              >
+                {isPlayingTest ? <Square className="w-4 h-4 fill-current text-white" /> : <Play className="w-4 h-4 fill-current text-emerald-400" />}
+              </button>
+
+              {/* Delete custom sound button (only visible when custom sound is selected) */}
+              {customSounds.some((cs) => cs.name === sound) && (
+                <button
+                  type="button"
+                  onClick={handleDeleteSelectedCustomSound}
+                  className="p-2 rounded-xl bg-red-900/70 hover:bg-red-800 border border-red-700/60 text-red-200 transition cursor-pointer flex items-center justify-center shrink-0"
+                  title="選択中の登録音源を削除"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="audio/*,.mp3,.wav,.m4a"
+                multiple
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+            </div>
+
+            {soundFeedback && (
+              <div className="text-[11px] text-emerald-300 bg-emerald-950/80 border border-emerald-600/60 px-2 py-1 rounded-lg flex items-center gap-1.5 animate-in fade-in">
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{soundFeedback}</span>
+              </div>
+            )}
+            <p className="text-[10px] text-gray-400">
+              ※追加したMP3音源は端末内に自動保存され、次回以降もどの予定でも選べます。
+            </p>
+          </div>
+        </form>
+
+        {/* Pinned Sticky Save Button (Always visible at bottom without scrolling!) */}
+        <div className="px-4 py-3 bg-[#1a202c] border-t border-gray-700/80 shrink-0 shadow-lg">
+          <button
+            type="submit"
+            form="reminder-modal-form"
+            disabled={isSubmitting}
+            className="w-full py-3 px-4 rounded-xl bg-[#38a169] hover:bg-[#2f855a] active:scale-98 text-white font-bold text-base shadow-md shadow-emerald-900/40 transition cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            <span>{isSubmitting ? '保存中...' : '保存する'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
