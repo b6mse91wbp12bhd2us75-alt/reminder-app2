@@ -30,6 +30,11 @@ export const initNativeAlarmSystem = async () => {
   return Promise.resolve();
 };
 
+// 過去の参照エラーを防ぐための互換エクスポート
+export const setSystemClockAlarm = (hour: number, minute: number, title: string): boolean => {
+  return true;
+};
+
 export const scheduleNativeReminder = async (item: ReminderItem) => {
   if (!Capacitor.isNativePlatform()) return;
 
