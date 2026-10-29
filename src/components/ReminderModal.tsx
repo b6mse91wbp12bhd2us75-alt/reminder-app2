@@ -3,7 +3,7 @@ import { ReminderItem, NoticeOption } from '../types/reminder';
 import { PRESET_SOUNDS, previewSound, stopAlarmSound } from '../services/audio';
 import { padZero } from '../utils/dateUtils';
 import { NumberStepper } from './NumberStepper';
-import { X, Volume2, Plus, Play, Square, Clock, RefreshCw, Trash2, Check } from 'lucide-react';
+import { X, Volume2, Plus, Play, Square, Clock, RefreshCw, Trash2, Check, Bell } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface ReminderModalProps {
@@ -11,8 +11,8 @@ interface ReminderModalProps {
   onClose: () => void;
   onSave: (reminder: ReminderItem) => Promise<void>;
   targetItem: ReminderItem | null;
-  user: User | null;
-  onGoogleSignIn: () => Promise<void>;
+  user?: User | null;
+  onGoogleSignIn?: () => Promise<void>;
   customSounds?: { name: string; url: string }[];
   onAddCustomSounds?: (sounds: { name: string; url: string; size?: number; mimeType?: string }[]) => void;
   onDeleteCustomSound?: (name: string) => void;
@@ -31,6 +31,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [memo, setMemo] = useState('');
   const [syncWithGoogle, setSyncWithGoogle] = useState(false);
 
+  // Date/Time
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear().toString());
   const [month, setMonth] = useState(padZero(now.getMonth() + 1));
@@ -38,12 +39,18 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [hour, setHour] = useState(padZero(now.getHours()));
   const [minute, setMinute] = useState(padZero(now.getMinutes()));
 
+  // Repeat
   const [repeatType, setRepeatType] = useState('なし');
   const [intervalDays, setIntervalDays] = useState('2');
+
+  // Snooze and Duration
   const [snoozeMin, setSnoozeMin] = useState('5');
   const [durationSec, setDurationSec] = useState('5');
+
+  // Advance notices
   const [notices, setNotices] = useState<NoticeOption[]>([]);
 
+  // Sound
   const [sound, setSound] = useState<string>(PRESET_SOUNDS[0].name);
   const [customSoundUrl, setCustomSoundUrl] = useState<string | undefined>(undefined);
   const [customSoundName, setCustomSoundName] = useState<string | undefined>(undefined);
@@ -53,6 +60,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Initialize or reset form
   useEffect(() => {
     if (!isOpen) {
       stopAlarmSound();
@@ -96,8 +104,30 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
         setRepeatType('なし');
       }
 
-      setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+      // Parse notices
+      if (targetItem.notices && targetItem.notices !== 'なし') {
+        const parsedList: NoticeOption[] = [];
+        const parts = targetItem.notices.split(',');
+        parts.forEach((p, idx) => {
+          const trimmed = p.trim();
+          for (const u of ['分前', '時間前', '日前', '週間前'] as const) {
+            if (trimmed.includes(u)) {
+              const val = parseFloat(trimmed.replace(u, '')) || 1;
+              parsedList.push({
+                id: `notice-${idx}-${Date.now()}`,
+                value: val,
+                unit: u,
+              });
+              break;
+            }
+          }
+        });
+        setNotices(parsedList.length > 0 ? parsedList : [{ id: 'n1', value: 1, unit: '日前' }]);
+      } else {
+        setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+      }
     } else {
+      // New reminder defaults
       setTitle('');
       setMemo('');
       setSyncWithGoogle(false);
@@ -127,6 +157,55 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const hourOptions = Array.from({ length: 24 }, (_, i) => padZero(i));
   const minuteOptions = Array.from({ length: 60 }, (_, i) => padZero(i));
 
+  // Quick date presets
+  const applyQuickDate = (type: 'today' | 'tomorrow' | 'weekend') => {
+    const d = new Date();
+    if (type === 'tomorrow') {
+      d.setDate(d.getDate() + 1);
+    } else if (type === 'weekend') {
+      const dayOfWeek = d.getDay();
+      const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
+      d.setDate(d.getDate() + daysUntilSaturday);
+    }
+    setYear(d.getFullYear().toString());
+    setMonth(padZero(d.getMonth() + 1));
+    setDay(padZero(d.getDate()));
+  };
+
+  // Quick timer preset (now, +5m, +10m, +15m, +30m, +1h)
+  const setQuickTimer = (mins: number) => {
+    const d = new Date();
+    if (mins > 0) {
+      d.setMinutes(d.getMinutes() + mins);
+    }
+    setYear(d.getFullYear().toString());
+    setMonth(padZero(d.getMonth() + 1));
+    setDay(padZero(d.getDate()));
+    setHour(padZero(d.getHours()));
+    setMinute(padZero(d.getMinutes()));
+  };
+
+  const handleAddNotice = () => {
+    setNotices((prev) => [
+      ...prev,
+      {
+        id: `notice-${Date.now()}-${Math.random()}`,
+        value: 1,
+        unit: '日前',
+      },
+    ]);
+  };
+
+  const handleRemoveNotice = (id: string) => {
+    setNotices((prev) => prev.filter((n) => n.id !== id));
+  };
+
+  const handleNoticeChange = (id: string, field: 'value' | 'unit', val: any) => {
+    setNotices((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, [field]: val } : n))
+    );
+  };
+
   const handleTestSound = () => {
     if (isPlayingTest) {
       stopAlarmSound();
@@ -144,7 +223,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
 
     const file = files[0];
     if (file.size > 25 * 1024 * 1024) {
-      alert(`「${file.name}」はファイルサイズが大きすぎます（最大25MB）。小さめの音源を選択してください。`);
+      alert(`「${file.name}」はファイルサイズが大きすぎます（最大25MB）。`);
       return;
     }
 
@@ -169,7 +248,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     };
 
     reader.onerror = () => {
-      alert(`「${file.name}」の読み込みに失敗しました。別の音声ファイルをお試しください。`);
+      alert(`「${file.name}」の読み込みに失敗しました。`);
       setSoundFeedback(null);
     };
 
@@ -196,13 +275,28 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       return;
     }
 
+    let finalRepeat = repeatType;
+    if (repeatType === '〇日おき') {
+      const days = parseInt(intervalDays.trim(), 10);
+      if (isNaN(days) || days <= 0) {
+        alert('〇日おきの間隔には1以上の正の整数を入力してください。');
+        return;
+      }
+      finalRepeat = `${days}日おき`;
+    }
+
+    const validNotices = notices
+      .filter((n) => Number(n.value) > 0)
+      .map((n) => `${Number(n.value)}${n.unit}`);
+    const noticesStr = validNotices.length > 0 ? validNotices.join(', ') : 'なし';
+
     const reminderData: ReminderItem = {
       id: targetItem?.id || `rem-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       title: title.trim(),
       memo: memo.trim(),
       target_time: `${year}-${month}-${day} ${hour}:${minute}`,
-      repeat: repeatType === '〇日おき' ? `${intervalDays}日おき` : repeatType,
-      notices: 'なし',
+      repeat: finalRepeat,
+      notices: noticesStr,
       sound,
       custom_sound_url: customSoundUrl,
       custom_sound_name: customSoundName,
@@ -210,6 +304,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       duration: parseInt(durationSec, 10) >= 0 ? parseInt(durationSec, 10) : 5,
       google_event_id: syncWithGoogle ? targetItem?.google_event_id : null,
       sync_with_google: syncWithGoogle,
+      completed_time: targetItem?.completed_time,
     };
 
     setIsSubmitting(true);
@@ -226,7 +321,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-[420px] bg-[#2d3748] border border-gray-600 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-white">
+      <div className="w-full max-w-[420px] bg-[#2d3748] border border-gray-600 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-white animate-in zoom-in-95 duration-150">
         <div className="bg-[#1a202c] px-5 py-3.5 flex items-center justify-between border-b border-gray-700/70 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-xl">{targetItem ? '✏️' : '🔔'}</span>
@@ -234,12 +329,20 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               {targetItem ? 'リマインダー編集' : 'リマインダー作成'}
             </h3>
           </div>
-          <button type="button" onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition cursor-pointer">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition cursor-pointer"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <form id="reminder-modal-form" onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-sm">
+        <form
+          id="reminder-modal-form"
+          onSubmit={handleSubmit}
+          className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-sm"
+        >
           <div>
             <input
               type="text"
@@ -261,37 +364,259 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             />
           </div>
 
-          {/* Date & Time */}
+          {/* Target Notification Date & Time */}
           <div className="space-y-1">
-            <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-blue-400" />
-              <span>通知日時</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-blue-400" />
+                <span>通知日時</span>
+              </label>
+
+              <div className="flex gap-1 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('today')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  今日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('tomorrow')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  明日
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyQuickDate('weekend')}
+                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                >
+                  今週末
+                </button>
+              </div>
+            </div>
+
             <div className="bg-[#3a4a5e] border border-gray-600 rounded-xl p-2.5 space-y-2">
               <div className="flex items-center gap-1.5 text-sm font-bold">
-                <select value={year} onChange={(e) => setYear(e.target.value)} className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer">
-                  {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+                <select
+                  value={year}
+                  onChange={(e) => setYear(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {yearOptions.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
                 </select>
                 <span className="text-xs">年</span>
-                <select value={month} onChange={(e) => setMonth(e.target.value)} className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer">
-                  {monthOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+
+                <select
+                  value={month}
+                  onChange={(e) => setMonth(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {monthOptions.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
                 </select>
                 <span className="text-xs">月</span>
-                <select value={day} onChange={(e) => setDay(e.target.value)} className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer">
-                  {dayOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+
+                <select
+                  value={day}
+                  onChange={(e) => setDay(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {dayOptions.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
                 </select>
                 <span className="text-xs">日</span>
               </div>
+
               <div className="flex items-center gap-1.5 text-sm font-bold border-t border-gray-600/50 pt-1.5">
-                <select value={hour} onChange={(e) => setHour(e.target.value)} className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer">
-                  {hourOptions.map((h) => <option key={h} value={h}>{h}</option>)}
+                <select
+                  value={hour}
+                  onChange={(e) => setHour(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {hourOptions.map((h) => (
+                    <option key={h} value={h}>{h}</option>
+                  ))}
                 </select>
                 <span className="mr-3 text-xs">時</span>
-                <select value={minute} onChange={(e) => setMinute(e.target.value)} className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer">
-                  {minuteOptions.map((mi) => <option key={mi} value={mi}>{mi}</option>)}
+
+                <select
+                  value={minute}
+                  onChange={(e) => setMinute(e.target.value)}
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                >
+                  {minuteOptions.map((mi) => (
+                    <option key={mi} value={mi}>{mi}</option>
+                  ))}
                 </select>
                 <span className="text-xs">分</span>
               </div>
+
+              {/* Quick Timer Presets */}
+              <div className="flex items-center gap-1 flex-wrap pt-1.5 border-t border-gray-600/40 text-xs">
+                <span className="text-[10px] text-gray-400 font-bold">設定補助:</span>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(0)}
+                  className="px-2 py-0.5 rounded-md bg-blue-900/60 hover:bg-blue-800 text-blue-200 font-bold text-[11px] cursor-pointer transition border border-blue-500/40"
+                  title="現在時刻にリセット"
+                >
+                  現在時刻
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(5)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +5分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(10)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +10分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(15)}
+                  className="px-1.5 py-0.5 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 font-bold text-[11px] cursor-pointer transition border border-emerald-600/40"
+                >
+                  +15分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(30)}
+                  className="px-1.5 py-0.5 rounded-md bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-bold text-[11px] cursor-pointer transition border border-amber-600/40"
+                >
+                  +30分
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setQuickTimer(60)}
+                  className="px-1.5 py-0.5 rounded-md bg-amber-950/70 hover:bg-amber-900 text-amber-300 font-bold text-[11px] cursor-pointer transition border border-amber-600/40"
+                >
+                  +1時間
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Repeat Setting */}
+          <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1 flex items-center gap-1">
+              <RefreshCw className="w-3.5 h-3.5 text-blue-400" />
+              <span>リピート設定</span>
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={repeatType}
+                onChange={(e) => setRepeatType(e.target.value)}
+                className="bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-1.5 text-white font-bold text-xs cursor-pointer"
+              >
+                <option value="なし">なし</option>
+                <option value="毎日">毎日</option>
+                <option value="毎週">毎週</option>
+                <option value="毎月">毎月</option>
+                <option value="毎年">毎年</option>
+                <option value="〇日おき">〇日おき</option>
+              </select>
+
+              {repeatType === '〇日おき' && (
+                <div className="flex items-center gap-1.5 animate-in fade-in">
+                  <NumberStepper
+                    value={parseInt(intervalDays, 10) || 2}
+                    min={1}
+                    max={365}
+                    onChange={(v) => setIntervalDays(v.toString())}
+                    suffix="日おき"
+                    compact
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Snooze & Duration */}
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label className="block text-xs font-bold text-gray-300 mb-1">スヌーズ時間</label>
+              <NumberStepper
+                value={parseInt(snoozeMin, 10) || 5}
+                min={1}
+                max={120}
+                onChange={(v) => setSnoozeMin(v.toString())}
+                suffix="分"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-300 mb-1">アラーム鳴動 (0=連続)</label>
+              <NumberStepper
+                value={parseInt(durationSec, 10) >= 0 ? parseInt(durationSec, 10) : 5}
+                min={0}
+                max={300}
+                onChange={(v) => setDurationSec(v.toString())}
+                suffix="秒"
+              />
+            </div>
+          </div>
+
+          {/* Custom Advance Notices */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
+                <Bell className="w-3.5 h-3.5 text-blue-400" />
+                <span>事前通知のカスタム設定</span>
+              </label>
+              <button
+                type="button"
+                onClick={handleAddNotice}
+                className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3 h-3" />
+                <span>通知を追加</span>
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {notices.map((n) => (
+                <div key={n.id} className="flex items-center gap-1.5 bg-[#3a4a5e] p-1.5 rounded-xl border border-gray-600/60">
+                  <NumberStepper
+                    value={n.value}
+                    min={1}
+                    max={999}
+                    onChange={(v) => handleNoticeChange(n.id, 'value', v)}
+                    compact
+                  />
+                  <select
+                    value={n.unit}
+                    onChange={(e) => handleNoticeChange(n.id, 'unit', e.target.value)}
+                    className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold text-xs cursor-pointer h-8"
+                  >
+                    <option value="分前">分前</option>
+                    <option value="時間前">時間前</option>
+                    <option value="日前">日前</option>
+                    <option value="週間前">週間前</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveNotice(n.id)}
+                    className="p-1.5 rounded-lg bg-red-800/80 hover:bg-red-700 text-red-200 ml-auto cursor-pointer"
+                    title="削除"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+              {notices.length === 0 && (
+                <p className="text-[11px] text-gray-400 italic">事前通知なし（時刻ちょうどのみ通知）</p>
+              )}
             </div>
           </div>
 
@@ -309,7 +634,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs transition cursor-pointer flex items-center gap-1 shadow-xs"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>＋ 外部音源を取り込む</span>
+                <span>外部音源を取り込む</span>
               </button>
             </div>
 
