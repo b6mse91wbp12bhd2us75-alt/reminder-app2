@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ReminderItem, NoticeOption } from '../types/reminder';
 import { PRESET_SOUNDS, previewSound, stopAlarmSound } from '../services/audio';
+import { setSystemClockAlarm } from '../services/nativeAlarm';
 import { padZero } from '../utils/dateUtils';
 import { NumberStepper } from './NumberStepper';
 import { X, Volume2, Plus, Play, Square, Clock, RefreshCw, Trash2, Check, Bell } from 'lucide-react';
@@ -30,6 +31,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [title, setTitle] = useState('');
   const [memo, setMemo] = useState('');
   const [syncWithGoogle, setSyncWithGoogle] = useState(false);
+  const [syncWithSystemClock, setSyncWithSystemClock] = useState(false);
 
   // Date/Time
   const now = new Date();
@@ -104,33 +106,36 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
         setRepeatType('なし');
       }
 
-      // Parse notices
       if (targetItem.notices && targetItem.notices !== 'なし') {
-        const parsedList: NoticeOption[] = [];
-        const parts = targetItem.notices.split(',');
-        parts.forEach((p, idx) => {
-          const trimmed = p.trim();
-          for (const u of ['分前', '時間前', '日前', '週間前'] as const) {
-            if (trimmed.includes(u)) {
-              const val = parseFloat(trimmed.replace(u, '')) || 1;
-              parsedList.push({
-                id: `notice-${idx}-${Date.now()}`,
-                value: val,
-                unit: u,
-              });
-              break;
-            }
+        const parsed = targetItem.notices.split(',').map((part, index) => {
+          const p = part.trim();
+          let unit: any = '分前';
+          let val = 10;
+          if (p.includes('時間前')) {
+            unit = '時間前';
+            val = parseInt(p.replace('時間前', ''), 10) || 1;
+          } else if (p.includes('日前')) {
+            unit = '日前';
+            val = parseInt(p.replace('日前', ''), 10) || 1;
+          } else if (p.includes('週間前')) {
+            unit = '週間前';
+            val = parseInt(p.replace('週間前', ''), 10) || 1;
+          } else {
+            unit = '分前';
+            val = parseInt(p.replace('分前', ''), 10) || 10;
           }
+          return { id: `notice-edit-${index}-${Date.now()}`, value: val, unit };
         });
-        setNotices(parsedList.length > 0 ? parsedList : [{ id: 'n1', value: 1, unit: '日前' }]);
+        setNotices(parsed);
       } else {
-        setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+        setNotices([]);
       }
     } else {
       // New reminder defaults
       setTitle('');
       setMemo('');
       setSyncWithGoogle(false);
+      setSyncWithSystemClock(false);
       setSound(PRESET_SOUNDS[0].name);
       setCustomSoundUrl(undefined);
       setCustomSoundName(undefined);
@@ -138,46 +143,43 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setIntervalDays('2');
       setSnoozeMin('5');
       setDurationSec('5');
-      setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+      setNotices([]);
 
-      setYear(currentNow.getFullYear().toString());
-      setMonth(padZero(currentNow.getMonth() + 1));
-      setDay(padZero(currentNow.getDate()));
-      setHour(padZero(currentNow.getHours()));
-      setMinute(padZero(currentNow.getMinutes()));
+      // Default to 10 mins in the future for safety
+      const defaultTime = new Date(currentNow.getTime() + 10 * 60 * 1000);
+      setYear(defaultTime.getFullYear().toString());
+      setMonth(padZero(defaultTime.getMonth() + 1));
+      setDay(padZero(defaultTime.getDate()));
+      setHour(padZero(defaultTime.getHours()));
+      setMinute(padZero(defaultTime.getMinutes()));
     }
   }, [isOpen, targetItem]);
 
-  if (!isOpen) return null;
-
-  const currentYearNum = now.getFullYear();
-  const yearOptions = Array.from({ length: 7 }, (_, i) => (currentYearNum + i).toString());
+  // Options
+  const currentYear = new Date().getFullYear();
+  const yearOptions = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2].map(String);
   const monthOptions = Array.from({ length: 12 }, (_, i) => padZero(i + 1));
   const dayOptions = Array.from({ length: 31 }, (_, i) => padZero(i + 1));
   const hourOptions = Array.from({ length: 24 }, (_, i) => padZero(i));
   const minuteOptions = Array.from({ length: 60 }, (_, i) => padZero(i));
 
-  // Quick date presets
-  const applyQuickDate = (type: 'today' | 'tomorrow' | 'weekend') => {
+  // Quick preset helpers
+  const setQuickDate = (type: 'today' | 'tomorrow' | 'weekend') => {
     const d = new Date();
     if (type === 'tomorrow') {
       d.setDate(d.getDate() + 1);
     } else if (type === 'weekend') {
       const dayOfWeek = d.getDay();
-      const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
-      d.setDate(d.getDate() + daysUntilSaturday);
+      const diff = dayOfWeek === 6 ? 7 : (6 - dayOfWeek);
+      d.setDate(d.getDate() + diff);
     }
     setYear(d.getFullYear().toString());
     setMonth(padZero(d.getMonth() + 1));
     setDay(padZero(d.getDate()));
   };
 
-  // Quick timer preset (now, +5m, +10m, +15m, +30m, +1h)
-  const setQuickTimer = (mins: number) => {
-    const d = new Date();
-    if (mins > 0) {
-      d.setMinutes(d.getMinutes() + mins);
-    }
+  const setQuickTimer = (offsetMinutes: number) => {
+    const d = new Date(Date.now() + offsetMinutes * 60 * 1000);
     setYear(d.getFullYear().toString());
     setMonth(padZero(d.getMonth() + 1));
     setDay(padZero(d.getDate()));
@@ -310,6 +312,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     setIsSubmitting(true);
     try {
       await onSave(reminderData);
+      if (syncWithSystemClock) {
+        setSystemClockAlarm(parseInt(hour, 10), parseInt(minute, 10), title.trim());
+      }
       stopAlarmSound();
       onClose();
     } catch (err: any) {
@@ -319,85 +324,93 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     }
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xs overflow-y-auto">
       <div className="w-full max-w-[420px] bg-[#2d3748] border border-gray-600 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-white animate-in zoom-in-95 duration-150">
+        {/* Modal Header */}
         <div className="bg-[#1a202c] px-5 py-3.5 flex items-center justify-between border-b border-gray-700/70 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-xl">{targetItem ? '✏️' : '🔔'}</span>
-            <h3 className="font-bold text-base tracking-wide text-white">
+            <h2 className="font-bold text-lg text-white">
               {targetItem ? 'リマインダー編集' : 'リマインダー作成'}
-            </h3>
+            </h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition cursor-pointer"
+            className="p-1.5 rounded-full hover:bg-gray-700 text-gray-300 hover:text-white transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
+        {/* Modal Body */}
         <form
           id="reminder-modal-form"
           onSubmit={handleSubmit}
-          className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-sm"
+          className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4"
         >
+          {/* Title */}
           <div>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="予定のタイトル (例: アラームテスト)"
+              placeholder="予定のタイトル (例: アラームテスト、畑の水やり)"
+              className="w-full bg-[#1a202c] border border-gray-600 focus:border-blue-400 rounded-xl px-3.5 py-2.5 text-white placeholder-gray-400 font-bold text-sm focus:outline-hidden"
               required
-              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-2 text-base font-bold text-white placeholder-gray-400 transition"
             />
           </div>
 
+          {/* Memo */}
           <div>
             <textarea
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
               placeholder="メモ (任意)"
               rows={2}
-              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-1.5 text-sm text-white placeholder-gray-400 transition resize-none"
+              className="w-full bg-[#1a202c] border border-gray-600 focus:border-blue-400 rounded-xl px-3.5 py-2 text-white placeholder-gray-400 text-xs focus:outline-hidden resize-none"
             />
           </div>
 
-          {/* Target Notification Date & Time */}
-          <div className="space-y-1">
+          {/* Date & Time Settings */}
+          <div className="bg-[#1a202c] p-3 rounded-2xl border border-gray-700 space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-blue-400" />
                 <span>通知日時</span>
               </label>
 
-              <div className="flex gap-1 text-[11px]">
+              {/* Quick Date Presets */}
+              <div className="flex items-center gap-1 text-xs">
                 <button
                   type="button"
-                  onClick={() => applyQuickDate('today')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                  onClick={() => setQuickDate('today')}
+                  className="px-2 py-0.5 rounded-md bg-[#2d3748] hover:bg-gray-700 text-gray-200 font-bold text-[11px] cursor-pointer transition border border-gray-600"
                 >
                   今日
                 </button>
                 <button
                   type="button"
-                  onClick={() => applyQuickDate('tomorrow')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                  onClick={() => setQuickDate('tomorrow')}
+                  className="px-2 py-0.5 rounded-md bg-[#2d3748] hover:bg-gray-700 text-gray-200 font-bold text-[11px] cursor-pointer transition border border-gray-600"
                 >
                   明日
                 </button>
                 <button
                   type="button"
-                  onClick={() => applyQuickDate('weekend')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
+                  onClick={() => setQuickDate('weekend')}
+                  className="px-2 py-0.5 rounded-md bg-[#2d3748] hover:bg-gray-700 text-gray-200 font-bold text-[11px] cursor-pointer transition border border-gray-600"
                 >
                   今週末
                 </button>
               </div>
             </div>
 
-            <div className="bg-[#3a4a5e] border border-gray-600 rounded-xl p-2.5 space-y-2">
+            <div className="space-y-2">
+              {/* Date Row */}
               <div className="flex items-center gap-1.5 text-sm font-bold">
                 <select
                   value={year}
@@ -433,6 +446,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 <span className="text-xs">日</span>
               </div>
 
+              {/* Time Row */}
               <div className="flex items-center gap-1.5 text-sm font-bold border-t border-gray-600/50 pt-1.5">
                 <select
                   value={hour}
@@ -711,6 +725,23 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 <span>{soundFeedback}</span>
               </div>
             )}
+          </div>
+
+          {/* System Clock Alarm Option */}
+          <div className="flex items-center justify-between p-2.5 rounded-xl bg-[#1e2633] border border-amber-500/40">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+              <div>
+                <div className="text-xs font-bold text-amber-200">スマホ本体の「時計」アラームにも同時連動</div>
+                <div className="text-[10px] text-gray-300">Android標準アラームアプリに直接登録（OS保証で100%確実に鳴らしたい時）</div>
+              </div>
+            </div>
+            <input
+              type="checkbox"
+              checked={syncWithSystemClock}
+              onChange={(e) => setSyncWithSystemClock(e.target.checked)}
+              className="w-4 h-4 rounded text-amber-500 accent-amber-500 cursor-pointer"
+            />
           </div>
         </form>
 
