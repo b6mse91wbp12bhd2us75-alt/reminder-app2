@@ -7,9 +7,7 @@ const config = {
   },
   plugins: {
     LocalNotifications: {
-      smallIcon: 'ic_stat_bell',
-      iconColor: '#3182ce',
-      sound: 'beep.wav',
+      iconColor: '#10B981',
     },
   },
 };
