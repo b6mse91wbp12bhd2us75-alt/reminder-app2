@@ -1,13 +1,9 @@
+import { LocalNotifications } from '@capacitor/local-notifications';
+import { Capacitor } from '@capacitor/core';
 import { ReminderItem } from '../types/reminder';
 import { parseDateTime, parseNoticesString } from '../utils/dateUtils';
 
-/**
- * Service to handle native Android Alarm / LocalNotification system.
- * Works seamlessly whether running inside native Android wrapper (Capacitor)
- * or in web/PWA mode.
- */
-
-// Unique channel ID for high-priority loud reminder alarms (v3 ensures Android recreates channel with valid sound)
+// Unique channel ID for high-priority loud reminder alarms
 export const ALARM_CHANNEL_ID = 'reminder_alarm_channel_v3';
 
 // Convert string ID into a deterministic 32-bit positive integer for Android notification IDs
@@ -16,7 +12,7 @@ export const hashIdToNumber = (str: string): number => {
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
     hash = (hash << 5) - hash + char;
-    hash = hash & hash; // Convert to 32bit integer
+    hash = hash & hash;
   }
   return Math.abs(hash % 2147483647);
 };
@@ -26,38 +22,33 @@ export const hashIdToNumber = (str: string): number => {
  */
 export const initNativeAlarmSystem = async () => {
   try {
-    const cap = (window as any).Capacitor;
-    if (cap && cap.Plugins && cap.Plugins.LocalNotifications) {
-      const ln = cap.Plugins.LocalNotifications;
-      
-      // Request permissions
-      const permStatus = await ln.checkPermissions();
-      if (permStatus.display !== 'granted') {
-        await ln.requestPermissions();
-      }
-
-      // Clean up obsolete channels
-      if (ln.deleteChannel) {
-        try {
-          await ln.deleteChannel({ id: 'reminder_alarm_channel_v1' });
-          await ln.deleteChannel({ id: 'reminder_alarm_channel_v2' });
-        } catch {}
-      }
-
-      // Create high-importance Android Notification Channel with sound
-      if (ln.createChannel) {
-        await ln.createChannel({
-          id: ALARM_CHANNEL_ID,
-          name: 'リマインダー大音量アラーム (高優先度)',
-          description: '予定の時刻に音とバイブレーションで通知する高優先度チャンネル',
-          importance: 5, // High importance (heads-up banner, sound, vibrate)
-          visibility: 1, // Public on lockscreen
-          vibration: true,
-          lights: true,
-          lightColor: '#10B981',
-        });
-      }
+    if (!Capacitor.isNativePlatform()) {
+      return;
     }
+
+    // Request permissions on Android
+    const permStatus = await LocalNotifications.checkPermissions();
+    if (permStatus.display !== 'granted') {
+      await LocalNotifications.requestPermissions();
+    }
+
+    // Clean up obsolete channels if they exist
+    try {
+      await LocalNotifications.deleteChannel({ id: 'reminder_alarm_channel_v1' });
+      await LocalNotifications.deleteChannel({ id: 'reminder_alarm_channel_v2' });
+    } catch {}
+
+    // Create high-importance Android Notification Channel
+    await LocalNotifications.createChannel({
+      id: ALARM_CHANNEL_ID,
+      name: 'リマインダー大音量アラーム (高優先度)',
+      description: '予定の時刻に音とバイブレーションで通知する高優先度チャンネル',
+      importance: 5, // High importance (heads-up banner, sound, vibrate)
+      visibility: 1, // Public on lockscreen
+      vibration: true,
+      lights: true,
+      lightColor: '#10B981',
+    });
   } catch (err) {
     console.warn('[NativeAlarm] Init warning:', err);
   }
@@ -67,12 +58,10 @@ export const initNativeAlarmSystem = async () => {
  * Schedule a native reminder and its pre-notices in Android OS AlarmManager
  */
 export const scheduleNativeReminder = async (item: ReminderItem) => {
-  const cap = (window as any).Capacitor;
-  if (!cap || !cap.Plugins || !cap.Plugins.LocalNotifications) {
+  if (!Capacitor.isNativePlatform()) {
     return;
   }
 
-  const ln = cap.Plugins.LocalNotifications;
   const now = Date.now();
   const notificationsToSchedule: any[] = [];
 
@@ -138,7 +127,7 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
 
   if (notificationsToSchedule.length > 0) {
     try {
-      await ln.schedule({ notifications: notificationsToSchedule });
+      await LocalNotifications.schedule({ notifications: notificationsToSchedule });
     } catch (e) {
       console.warn('[NativeAlarm] Schedule failed:', e);
     }
@@ -149,12 +138,10 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
  * Cancel native notifications for a specific reminder
  */
 export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
-  const cap = (window as any).Capacitor;
-  if (!cap || !cap.Plugins || !cap.Plugins.LocalNotifications) {
+  if (!Capacitor.isNativePlatform()) {
     return;
   }
 
-  const ln = cap.Plugins.LocalNotifications;
   const idStr = typeof itemOrId === 'string' ? itemOrId : itemOrId.id;
   const baseId = hashIdToNumber(idStr);
 
@@ -164,7 +151,7 @@ export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
   }
 
   try {
-    await ln.cancel({ notifications: idsToCancel });
+    await LocalNotifications.cancel({ notifications: idsToCancel });
   } catch (e) {
     console.warn('[NativeAlarm] Cancel failed:', e);
   }
@@ -174,17 +161,14 @@ export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
  * Synchronize all active reminders with Android OS Native AlarmManager.
  */
 export const syncAllNativeReminders = async (reminders: ReminderItem[]) => {
-  const cap = (window as any).Capacitor;
-  if (!cap || !cap.Plugins || !cap.Plugins.LocalNotifications) {
+  if (!Capacitor.isNativePlatform()) {
     return;
   }
 
-  const ln = cap.Plugins.LocalNotifications;
-
   try {
-    const pending = await ln.getPending();
+    const pending = await LocalNotifications.getPending();
     if (pending && pending.notifications && pending.notifications.length > 0) {
-      await ln.cancel({ notifications: pending.notifications });
+      await LocalNotifications.cancel({ notifications: pending.notifications });
     }
 
     for (const rem of reminders) {
