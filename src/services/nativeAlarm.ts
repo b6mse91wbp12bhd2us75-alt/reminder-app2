@@ -7,8 +7,8 @@ import { parseDateTime, parseNoticesString } from '../utils/dateUtils';
  * or in web/PWA mode.
  */
 
-// Unique channel ID for high-priority loud reminder alarms
-export const ALARM_CHANNEL_ID = 'reminder_alarm_channel_v1';
+// Unique channel ID for high-priority loud reminder alarms (v3 ensures Android recreates channel with valid sound)
+export const ALARM_CHANNEL_ID = 'reminder_alarm_channel_v3';
 
 // Convert string ID into a deterministic 32-bit positive integer for Android notification IDs
 export const hashIdToNumber = (str: string): number => {
@@ -26,7 +26,6 @@ export const hashIdToNumber = (str: string): number => {
  */
 export const initNativeAlarmSystem = async () => {
   try {
-    // Check if Capacitor LocalNotifications is available in runtime
     const cap = (window as any).Capacitor;
     if (cap && cap.Plugins && cap.Plugins.LocalNotifications) {
       const ln = cap.Plugins.LocalNotifications;
@@ -37,18 +36,25 @@ export const initNativeAlarmSystem = async () => {
         await ln.requestPermissions();
       }
 
-      // Create high-importance Android Notification Channel
+      // Clean up obsolete channels
+      if (ln.deleteChannel) {
+        try {
+          await ln.deleteChannel({ id: 'reminder_alarm_channel_v1' });
+          await ln.deleteChannel({ id: 'reminder_alarm_channel_v2' });
+        } catch {}
+      }
+
+      // Create high-importance Android Notification Channel with sound
       if (ln.createChannel) {
         await ln.createChannel({
           id: ALARM_CHANNEL_ID,
-          name: 'リマインダー大音量アラーム',
+          name: 'リマインダー大音量アラーム (高優先度)',
           description: '予定の時刻に音とバイブレーションで通知する高優先度チャンネル',
           importance: 5, // High importance (heads-up banner, sound, vibrate)
           visibility: 1, // Public on lockscreen
-          sound: 'alarm_ring.wav',
           vibration: true,
           lights: true,
-          lightColor: '#3B82F6',
+          lightColor: '#10B981',
         });
       }
     }
@@ -95,12 +101,11 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
         at: new Date(mainTimestamp),
         allowWhileIdle: true, // Wakes phone from Doze sleep
       },
-      sound: 'alarm_ring.wav',
       extra: {
         reminderId: item.id,
         isPreNotice: false,
       },
-      smallIcon: 'res://drawable/ic_stat_alarm',
+      smallIcon: 'ic_launcher',
     });
   }
 
@@ -120,13 +125,12 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
             at: new Date(preTime),
             allowWhileIdle: true,
           },
-          sound: 'alarm_ring.wav',
           extra: {
             reminderId: item.id,
             isPreNotice: true,
             label: p.label,
           },
-          smallIcon: 'res://drawable/ic_stat_alarm',
+          smallIcon: 'ic_launcher',
         });
       }
     });
@@ -155,7 +159,6 @@ export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
   const baseId = hashIdToNumber(idStr);
 
   const idsToCancel = [{ id: baseId }];
-  // Cancel potential pre-notice IDs (up to 10 notices)
   for (let i = 0; i < 10; i++) {
     idsToCancel.push({ id: baseId + 10000 + i });
   }
@@ -179,13 +182,11 @@ export const syncAllNativeReminders = async (reminders: ReminderItem[]) => {
   const ln = cap.Plugins.LocalNotifications;
 
   try {
-    // Clear previously pending notifications to prevent duplicates
     const pending = await ln.getPending();
     if (pending && pending.notifications && pending.notifications.length > 0) {
       await ln.cancel({ notifications: pending.notifications });
     }
 
-    // Reschedule all active reminders
     for (const rem of reminders) {
       await scheduleNativeReminder(rem);
     }
