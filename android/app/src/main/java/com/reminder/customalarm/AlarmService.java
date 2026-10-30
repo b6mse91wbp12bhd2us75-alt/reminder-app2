@@ -24,8 +24,7 @@ import androidx.core.app.NotificationCompat;
 import java.io.File;
 
 /**
- * Native Android Foreground Service that plays loud alarm audio and vibrates.
- * Runs independently of the JavaScript / WebView environment.
+ * Native Android Foreground Service for Reminders with adjustable volume and vibration.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
@@ -66,15 +65,17 @@ public class AlarmService extends Service {
             String audioPath = intent.getStringExtra("AUDIO_FILE");
             int durationSec = intent.getIntExtra("DURATION", 15);
             if (durationSec <= 0) durationSec = 60;
+            int volume = intent.getIntExtra("VOLUME", 70); // 0〜100
 
-            startAlarmWithNotification(title, memo, audioPath, durationSec);
+            startAlarmWithNotification(title, memo, audioPath, durationSec, volume);
             return START_STICKY;
         }
 
         return START_NOT_STICKY;
     }
 
-    private void startAlarmWithNotification(String title, String memo, String audioPath, int durationSec) {
+    private void startAlarmWithNotification(String title, String memo, String audioPath, int durationSec, int volume) {
+        // 1. WakeLock
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
@@ -85,6 +86,7 @@ public class AlarmService extends Service {
             Log.w(TAG, "Failed to acquire wakelock", e);
         }
 
+        // 2. Build Stop Intent
         Intent stopIntent = new Intent(this, AlarmService.class);
         stopIntent.setAction(ACTION_STOP_ALARM);
         PendingIntent stopPendingIntent = PendingIntent.getService(
@@ -94,6 +96,7 @@ public class AlarmService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        // 3. Build Open App Intent
         Intent openAppIntent = new Intent(this, MainActivity.class);
         openAppIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent openPendingIntent = PendingIntent.getActivity(
@@ -105,6 +108,7 @@ public class AlarmService extends Service {
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
+        // 4. Build Notification
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle("⏰ " + title)
@@ -125,8 +129,10 @@ public class AlarmService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        playAudio(audioPath);
+        // 5. Play Audio with adjustable user volume (0 = silent/vibrate only)
+        playAudio(audioPath, volume);
 
+        // 6. Vibrate
         try {
             vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             if (vibrator != null && vibrator.hasVibrator()) {
@@ -137,6 +143,7 @@ public class AlarmService extends Service {
             Log.w(TAG, "Vibration failed", e);
         }
 
+        // 7. Auto Stop timer
         autoStopHandler = new Handler(Looper.getMainLooper());
         autoStopHandler.postDelayed(() -> {
             Log.d(TAG, "Alarm auto-stopped after duration: " + durationSec + "s");
@@ -144,12 +151,21 @@ public class AlarmService extends Service {
         }, durationSec * 1000L);
     }
 
-    private void playAudio(String audioPath) {
+    private void playAudio(String audioPath, int volume) {
         try {
             if (mediaPlayer != null) {
                 mediaPlayer.release();
                 mediaPlayer = null;
             }
+
+            // 0%なら音は鳴らさずバイブレーションのみ
+            if (volume <= 0) {
+                Log.d(TAG, "Volume is 0% (Silent / Vibrate only).");
+                return;
+            }
+
+            // 0.01f 〜 1.0f にスケーリング
+            float volFloat = Math.max(0.01f, Math.min(1.0f, volume / 100.0f));
 
             mediaPlayer = new MediaPlayer();
             AudioAttributes audioAttributes = new AudioAttributes.Builder()
@@ -157,6 +173,7 @@ public class AlarmService extends Service {
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build();
             mediaPlayer.setAudioAttributes(audioAttributes);
+            mediaPlayer.setVolume(volFloat, volFloat);
 
             boolean audioSet = false;
 
@@ -165,7 +182,6 @@ public class AlarmService extends Service {
                 if (customFile.exists() && customFile.length() > 0) {
                     mediaPlayer.setDataSource(customFile.getAbsolutePath());
                     audioSet = true;
-                    Log.d(TAG, "Playing custom external audio from file: " + customFile.getAbsolutePath());
                 }
             }
 
@@ -178,12 +194,9 @@ public class AlarmService extends Service {
                             mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
                             afd.close();
                             audioSet = true;
-                            Log.d(TAG, "Playing bundled raw/alarm_ring.wav");
                         }
                     }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to load raw/alarm_ring", e);
-                }
+                } catch (Exception ignored) {}
             }
 
             if (!audioSet) {
@@ -192,7 +205,6 @@ public class AlarmService extends Service {
                     defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
                 }
                 mediaPlayer.setDataSource(this, defaultAlarmUri);
-                Log.d(TAG, "Playing system default alarm ringtone");
             }
 
             mediaPlayer.setLooping(true);
@@ -215,21 +227,21 @@ public class AlarmService extends Service {
                     mediaPlayer.stop();
                 }
                 mediaPlayer.release();
-            } catch (Exception e) {}
+            } catch (Exception ignored) {}
             mediaPlayer = null;
         }
 
         if (vibrator != null) {
             try {
                 vibrator.cancel();
-            } catch (Exception e) {}
+            } catch (Exception ignored) {}
             vibrator = null;
         }
 
         if (wakeLock != null && wakeLock.isHeld()) {
             try {
                 wakeLock.release();
-            } catch (Exception e) {}
+            } catch (Exception ignored) {}
             wakeLock = null;
         }
 
@@ -252,10 +264,10 @@ public class AlarmService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "リマインダー大音量アラーム (ネイティブ)",
+                "リマインダーアラーム (ネイティブ)",
                 NotificationManager.IMPORTANCE_HIGH
             );
-            channel.setDescription("アプリ終了時にも大音量で確実に鳴動する高優先度チャンネル");
+            channel.setDescription("予定の時刻に確実に通知・鳴動する高優先度チャンネル");
             channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
             channel.enableVibration(true);
             channel.setSound(null, null);
