@@ -28,10 +28,8 @@ import { User } from 'firebase/auth';
 import { Plus, CheckCircle2, AlertTriangle, Trash2, LogOut, Send, CheckSquare } from 'lucide-react';
 import {
   initNativeAlarmSystem,
-  scheduleNativeReminder,
-  cancelNativeReminder,
   syncAllNativeReminders,
-  scheduleQuickTestAlarm,
+  stopNativeAlarm,
 } from './services/nativeAlarm';
 import {
   getAllCustomSounds,
@@ -92,16 +90,6 @@ export default function App() {
     }, 4500);
   };
 
-  // Instant 10-second alarm test for closed app verification
-  const handleRun10SecTest = async () => {
-    const success = await scheduleQuickTestAlarm(10);
-    if (success) {
-      showToast('⚡ 10秒後にテストアラームを予約しました！【今すぐアプリを閉じて】画面をOFFにして10秒お待ちください。大音量で通知が届きます。');
-    } else {
-      showToast('📱 10秒後テストはAndroid APKアプリ専用の機能です。');
-    }
-  };
-
   // Smartphone frame mockup toggle for desktop
   const [isFramed, setIsFramed] = useState(true);
 
@@ -119,7 +107,6 @@ export default function App() {
     try {
       const savedReminders = localStorage.getItem(STORAGE_REMINDERS_KEY);
       const savedCompleted = localStorage.getItem(STORAGE_COMPLETED_KEY);
-      // Load custom sounds from IndexedDB (no 5MB limit)
       getAllCustomSounds().then((sounds) => {
         if (sounds && sounds.length > 0) {
           setCustomSounds(sounds);
@@ -147,7 +134,6 @@ export default function App() {
       if (savedReminders) {
         setReminders(JSON.parse(savedReminders));
       } else {
-        // Seed friendly test & sample reminders
         const now = new Date();
         const test5MinLater = new Date(now.getTime() + 5 * 60 * 1000);
         const tomorrowSample = new Date(now.getTime() + 24 * 60 * 60 * 1000);
@@ -184,7 +170,6 @@ export default function App() {
         setCompleted(JSON.parse(savedCompleted));
       }
 
-      // Mark past reminders on load so they don't fire retroactively
       const startupTime = Date.now();
       const loaded = savedReminders ? JSON.parse(savedReminders) : [];
       loaded.forEach((r: ReminderItem) => {
@@ -197,10 +182,8 @@ export default function App() {
       console.warn('Failed to load stored reminders:', e);
     }
 
-    // Request notification permission on first interaction
     requestNotificationPermission();
 
-    // Initialize Android native alarm channels and permissions, then automatically sync all reminders
     initNativeAlarmSystem().then(() => {
       const saved = localStorage.getItem(STORAGE_REMINDERS_KEY);
       if (saved) {
@@ -211,14 +194,12 @@ export default function App() {
     });
   }, []);
 
-  // 2. Persist data changes
   const saveRemindersToStorage = (updated: ReminderItem[]) => {
     setReminders(updated);
     remindersRef.current = updated;
     try {
       localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(updated));
     } catch {}
-    // Sync with Android OS AlarmManager
     syncAllNativeReminders(updated);
   };
 
@@ -227,12 +208,6 @@ export default function App() {
     try {
       localStorage.setItem(STORAGE_COMPLETED_KEY, JSON.stringify(updated));
     } catch {}
-  };
-
-  const handleImportJsonData = (newReminders: ReminderItem[], newCompleted: ReminderItem[]) => {
-    saveRemindersToStorage([...newReminders, ...reminders]);
-    saveCompletedToStorage([...newCompleted, ...completed]);
-    showToast(`${newReminders.length + newCompleted.length}件のデータをインポートしました。`);
   };
 
   const handleAddCustomSounds = async (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
@@ -261,7 +236,6 @@ export default function App() {
     showToast(`音源「${soundName}」を削除しました。`);
   };
 
-  // 3. Initialize Firebase Auth
   useEffect(() => {
     const unsubscribe = initAuth(
       (currentUser, token) => {
@@ -275,7 +249,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 4. Timer Loop: Checks reminders and snoozes every second
   useEffect(() => {
     const timer = setInterval(() => {
       const currentList = remindersRef.current;
@@ -285,7 +258,6 @@ export default function App() {
       const nowTime = now.getTime();
 
       currentList.forEach((item) => {
-        // A. Check Snoozed Time
         if (item.snoozed_until) {
           const snoozedDate = parseDateTime(item.snoozed_until);
           if (snoozedDate && nowTime >= snoozedDate.getTime()) {
@@ -301,7 +273,6 @@ export default function App() {
           }
         }
 
-        // B. Check Main Scheduled Time
         const mainKey = `${item.id}_${item.target_time}_main`;
         const targetDate = parseDateTime(item.target_time);
         if (targetDate) {
@@ -314,7 +285,6 @@ export default function App() {
           }
         }
 
-        // C. Check Advance Notices
         if (targetDate) {
           const diffSec = Math.floor((targetDate.getTime() - nowTime) / 1000);
           if (diffSec > 0 && item.notices && item.notices !== 'なし') {
@@ -336,7 +306,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Trigger Alarm handler
   const triggerAlarm = (
     reminder: ReminderItem,
     isPreNotice = false,
@@ -359,9 +328,9 @@ export default function App() {
     });
   };
 
-  // Alarm actions
   const handleStopAlarm = () => {
     stopAlarmSound();
+    stopNativeAlarm();
     setActiveAlarm(null);
   };
 
@@ -385,7 +354,6 @@ export default function App() {
     handleCompleteReminder(alarmData.reminder);
   };
 
-  // Google sign in / sign out
   const handleGoogleSignIn = async () => {
     try {
       const res = await googleSignIn();
@@ -429,7 +397,6 @@ export default function App() {
     showToast(`自動取込された${count}件の予定を一括削除し、元のリマインダーに戻しました。`);
   };
 
-  // Save Reminder (Create or Edit)
   const handleSaveReminder = async (item: ReminderItem) => {
     let googleEventId = item.google_event_id;
 
@@ -495,7 +462,6 @@ export default function App() {
     showToast(`「${finalItem.title}」を保存しました。`);
   };
 
-  // Push single reminder to Google Calendar
   const handlePushSingleToCalendar = async (item: ReminderItem) => {
     let token = await getAccessToken();
     if (!token || !user) {
@@ -527,7 +493,6 @@ export default function App() {
     }
   };
 
-  // Unlink single reminder from Google Calendar
   const handleUnlinkCalendar = (item: ReminderItem) => {
     const updated = reminders.map((r) =>
       r.id === item.id ? { ...r, google_event_id: null, sync_with_google: false } : r
@@ -536,7 +501,6 @@ export default function App() {
     showToast('カレンダー連携印を解除しました。');
   };
 
-  // Toggle selection for batch export
   const handleToggleSelectReminder = (item: ReminderItem) => {
     setSelectedReminderIds((prev) => {
       const next = new Set(prev);
@@ -597,7 +561,6 @@ export default function App() {
     showToast(`選択した${successCount}件の予定をGoogleカレンダーに送信しました！`);
   };
 
-  // Mark as Completed
   const handleCompleteReminder = (item: ReminderItem) => {
     const newReminders = reminders.filter((r) => r.id !== item.id);
     const completedItem: ReminderItem = {
@@ -625,7 +588,6 @@ export default function App() {
     saveRemindersToStorage(newReminders);
   };
 
-  // Delete completed item
   const handleDeleteCompleted = (item: ReminderItem) => {
     const hasGoogle = !!item.google_event_id;
     const confirmMessage = hasGoogle
@@ -651,14 +613,12 @@ export default function App() {
     });
   };
 
-  // Open Edit Modal
   const handleOpenEdit = (item: ReminderItem, fromCompleted = false) => {
     setEditingItem(item);
     setIsEditingFromCompleted(fromCompleted);
     setIsReminderModalOpen(true);
   };
 
-  // Categorize schedule reminders
   const { pastItems, todayItems, futureItems } = useMemo(() => {
     const past: ReminderItem[] = [];
     const today: ReminderItem[] = [];
@@ -678,7 +638,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#1e2530] flex items-center justify-center p-0 md:p-6 font-sans text-white select-none">
-      {/* Smartphone Container */}
       <div
         className={`w-full bg-[#2d3748] flex flex-col shadow-2xl transition-all duration-200 overflow-hidden ${
           isFramed
@@ -686,7 +645,6 @@ export default function App() {
             : 'max-w-2xl min-h-screen md:rounded-2xl'
         }`}
       >
-        {/* App Header */}
         <Header
           currentTab={currentTab}
           onSwitchTab={setCurrentTab}
@@ -712,7 +670,6 @@ export default function App() {
           selectedCount={selectedReminderIds.size}
         />
 
-        {/* Toast Feedback Notification Banner */}
         {toastMessage && (
           <div className="bg-emerald-950/95 border-b border-emerald-600/80 text-emerald-100 text-xs sm:text-sm px-4 py-2.5 flex items-center justify-between shadow-lg animate-in fade-in duration-150">
             <span className="font-semibold flex items-center gap-2">
@@ -729,12 +686,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4">
           {currentTab === 'schedule' ? (
-            /* SCHEDULE TAB */
             <div className="space-y-4">
-              {/* Emergency Cleanup Banner for Google Calendar Clutter */}
               {importedCalendarItemsCount > 0 && (
                 <div className="bg-gradient-to-r from-amber-950/95 to-rose-950/90 border-2 border-amber-500 rounded-2xl p-4 shadow-xl space-y-3 animate-in fade-in duration-200">
                   <div className="flex items-start gap-3">
@@ -776,7 +730,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Selection Export Floating Action Bar */}
               {isSelectionMode && (
                 <div className="bg-[#243346] border-2 border-blue-400/80 rounded-2xl p-3 shadow-xl space-y-2.5 sticky top-0 z-20 animate-in slide-in-from-top-2">
                   <div className="flex items-center justify-between text-xs font-bold text-blue-200">
@@ -823,31 +776,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* 10-Second Quick Alarm Test for Closed App Verification */}
-              <div className="bg-gradient-to-r from-[#172554] to-[#1e293b] border border-blue-500/50 rounded-2xl p-3 shadow-md flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-blue-500/20 border border-blue-400/40 flex items-center justify-center text-lg shrink-0">
-                    ⚡
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-bold text-xs sm:text-sm text-blue-200">
-                      閉じた状態のアラーム即時テスト
-                    </div>
-                    <div className="text-[11px] text-blue-300/80">
-                      押してすぐにアプリを閉じると10秒後に大音量アラームが鳴ります
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRun10SecTest}
-                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs sm:text-sm shadow-md transition cursor-pointer shrink-0"
-                >
-                  10秒テスト
-                </button>
-              </div>
-
-              {/* Past Section */}
               {pastItems.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center gap-2 px-1">
@@ -876,7 +804,6 @@ export default function App() {
                 </section>
               )}
 
-              {/* Today Section */}
               {todayItems.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center gap-2 px-1">
@@ -905,7 +832,6 @@ export default function App() {
                 </section>
               )}
 
-              {/* Future Section */}
               {futureItems.length > 0 && (
                 <section className="space-y-2">
                   <div className="flex items-center gap-2 px-1">
@@ -934,7 +860,6 @@ export default function App() {
                 </section>
               )}
 
-              {/* Empty State */}
               {reminders.length === 0 && (
                 <div className="text-center py-20 px-4 space-y-4">
                   <div className="w-16 h-16 mx-auto rounded-3xl bg-[#3a4a5e] flex items-center justify-center text-3xl shadow-inner text-gray-400">
@@ -963,7 +888,6 @@ export default function App() {
               )}
             </div>
           ) : (
-            /* COMPLETED TAB */
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <div className="flex items-center gap-2">
@@ -1000,7 +924,6 @@ export default function App() {
         </main>
       </div>
 
-      {/* Reminder Create/Edit Modal */}
       <ReminderModal
         isOpen={isReminderModalOpen}
         onClose={() => setIsReminderModalOpen(false)}
@@ -1013,7 +936,6 @@ export default function App() {
         onDeleteCustomSound={handleDeleteCustomSound}
       />
 
-      {/* Active Alarm & Snooze Modal */}
       <AlarmModal
         alarm={activeAlarm}
         onStop={handleStopAlarm}
@@ -1021,7 +943,6 @@ export default function App() {
         onCompleteDirectly={handleCompleteFromAlarm}
       />
 
-      {/* Google Calendar Selective Export Modal */}
       <GoogleSyncModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
@@ -1037,19 +958,16 @@ export default function App() {
         }}
       />
 
-      {/* Smartphone QR Code & Home Screen Installation Modal */}
       <PhoneShareModal
         isOpen={isPhoneModalOpen}
         onClose={() => setIsPhoneModalOpen(false)}
       />
 
-      {/* Android Native APK Package & Guide Modal */}
       <AndroidApkModal
         isOpen={isApkModalOpen}
         onClose={() => setIsApkModalOpen(false)}
       />
 
-      {/* Confirmation Dialog for Destructive Operations */}
       <ConfirmationDialog
         isOpen={confirmDialog.isOpen}
         title={confirmDialog.title}
