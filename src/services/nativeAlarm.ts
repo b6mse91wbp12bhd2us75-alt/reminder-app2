@@ -10,55 +10,34 @@ interface NativeAlarmPluginInterface {
     timestamp: number;
     audioBase64?: string;
     duration?: number;
+    volume?: number;
   }): Promise<{ success: boolean; audioPath?: string }>;
 
   cancelAlarm(options: { id: string }): Promise<{ success: boolean }>;
-
   stopAlarm(): Promise<{ success: boolean }>;
-
-  testAlarmNow(options: {
-    delaySeconds?: number;
-    title?: string;
-    memo?: string;
-    audioBase64?: string;
-  }): Promise<{ success: boolean }>;
 }
 
 const NativeAlarm = registerPlugin<NativeAlarmPluginInterface>('NativeAlarm');
 
-export const initNativeAlarmSystem = async () => {
-  return Promise.resolve();
-};
-
-// 過去の参照エラーを防ぐための互換エクスポート
-export const setSystemClockAlarm = (hour: number, minute: number, title: string): boolean => {
-  return true;
-};
+export const initNativeAlarmSystem = async () => Promise.resolve();
+export const setSystemClockAlarm = () => true;
 
 export const scheduleNativeReminder = async (item: ReminderItem) => {
   if (!Capacitor.isNativePlatform()) return;
 
   const now = Date.now();
   let targetDate = parseDateTime(item.target_time);
-
   if (item.snoozed_until) {
     const sDate = new Date(item.snoozed_until);
-    if (!isNaN(sDate.getTime())) {
-      targetDate = sDate;
-    }
+    if (!isNaN(sDate.getTime())) targetDate = sDate;
   }
-
   if (!targetDate) return;
 
   let mainTimestamp = targetDate.getTime();
-
   if (mainTimestamp <= now) {
     const diff = now - mainTimestamp;
-    if (diff < 60 * 1000) {
-      mainTimestamp = now + 5000;
-    } else {
-      return;
-    }
+    if (diff < 60 * 1000) mainTimestamp = now + 5000;
+    else return;
   }
 
   try {
@@ -69,9 +48,10 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
       timestamp: mainTimestamp,
       audioBase64: item.custom_sound_url,
       duration: item.duration || 15,
+      volume: item.volume !== undefined ? item.volume : 70,
     });
   } catch (err) {
-    console.warn('[NativeAlarm] Failed to schedule native alarm:', err);
+    console.warn('[NativeAlarm] Failed to schedule:', err);
   }
 };
 
@@ -81,7 +61,7 @@ export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
   try {
     await NativeAlarm.cancelAlarm({ id });
   } catch (err) {
-    console.warn('[NativeAlarm] Failed to cancel native alarm:', err);
+    console.warn('[NativeAlarm] Failed to cancel:', err);
   }
 };
 
@@ -90,24 +70,7 @@ export const stopNativeAlarm = async () => {
   try {
     await NativeAlarm.stopAlarm();
   } catch (err) {
-    console.warn('[NativeAlarm] Failed to stop native alarm:', err);
-  }
-};
-
-export const scheduleQuickTestAlarm = async (delaySeconds = 10, audioBase64?: string): Promise<boolean> => {
-  if (!Capacitor.isNativePlatform()) return false;
-
-  try {
-    const res = await NativeAlarm.testAlarmNow({
-      delaySeconds,
-      title: '⏰【テスト成功】大音量アラーム',
-      memo: 'アプリを完全に閉じた状態（画面OFF）での発火テストに成功しました！',
-      audioBase64,
-    });
-    return !!res.success;
-  } catch (e) {
-    console.error('[NativeAlarm] Failed to schedule test alarm:', e);
-    return false;
+    console.warn('[NativeAlarm] Failed to stop:', err);
   }
 };
 
