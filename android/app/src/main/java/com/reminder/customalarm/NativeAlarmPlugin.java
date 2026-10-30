@@ -16,8 +16,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 
 /**
- * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
- * and native file saving for custom MP3 external audio files.
+ * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock with volume support.
  */
 @CapacitorPlugin(name = "NativeAlarm")
 public class NativeAlarmPlugin extends Plugin {
@@ -31,6 +30,7 @@ public class NativeAlarmPlugin extends Plugin {
         Long timestamp = call.getLong("timestamp");
         String audioBase64 = call.getString("audioBase64");
         Integer duration = call.getInt("duration", 15);
+        Integer volume = call.getInt("volume", 70);
 
         if (id == null || timestamp == null) {
             call.reject("id and timestamp are required");
@@ -38,7 +38,7 @@ public class NativeAlarmPlugin extends Plugin {
         }
 
         try {
-            String audioPath = executeScheduleAlarm(id, title, memo, timestamp, audioBase64, duration != null ? duration : 15);
+            String audioPath = executeScheduleAlarm(id, title, memo, timestamp, audioBase64, duration != null ? duration : 15, volume != null ? volume : 70);
             JSObject ret = new JSObject();
             ret.put("success", true);
             ret.put("audioPath", audioPath);
@@ -99,27 +99,7 @@ public class NativeAlarmPlugin extends Plugin {
         call.resolve(ret);
     }
 
-    @PluginMethod
-    public void testAlarmNow(PluginCall call) {
-        int delaySeconds = call.getInt("delaySeconds", 10);
-        String title = call.getString("title", "【テスト成功】大音量アラーム");
-        String memo = call.getString("memo", "アプリを完全に閉じた状態での発火テストに成功しました！");
-        String audioBase64 = call.getString("audioBase64");
-
-        long targetTime = System.currentTimeMillis() + (delaySeconds * 1000L);
-
-        try {
-            executeScheduleAlarm("quick_test_alarm", title, memo, targetTime, audioBase64, 15);
-            JSObject ret = new JSObject();
-            ret.put("success", true);
-            call.resolve(ret);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed test alarm", e);
-            call.reject("Failed test alarm: " + e.getMessage());
-        }
-    }
-
-    private String executeScheduleAlarm(String id, String title, String memo, long timestamp, String audioBase64, int duration) throws Exception {
+    private String executeScheduleAlarm(String id, String title, String memo, long timestamp, String audioBase64, int duration, int volume) throws Exception {
         Context context = getContext();
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (alarmManager == null) {
@@ -149,6 +129,7 @@ public class NativeAlarmPlugin extends Plugin {
         alarmIntent.putExtra("MEMO", memo);
         alarmIntent.putExtra("AUDIO_FILE", audioFilePath);
         alarmIntent.putExtra("DURATION", duration);
+        alarmIntent.putExtra("VOLUME", volume);
 
         PendingIntent alarmPendingIntent = PendingIntent.getBroadcast(
             context,
@@ -159,7 +140,7 @@ public class NativeAlarmPlugin extends Plugin {
 
         AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
         alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-        Log.d(TAG, "Scheduled native AlarmClock for ID: " + id + " at: " + timestamp);
+        Log.d(TAG, "Scheduled native AlarmClock with volume=" + volume + "% for: " + id);
 
         return audioFilePath;
     }
@@ -181,10 +162,9 @@ public class NativeAlarmPlugin extends Plugin {
             fos.flush();
             fos.close();
 
-            Log.d(TAG, "Saved custom audio file to: " + destFile.getAbsolutePath());
             return destFile.getAbsolutePath();
         } catch (Exception e) {
-            Log.e(TAG, "Failed to save base64 audio to file", e);
+            Log.e(TAG, "Failed to save base64 audio", e);
             return null;
         }
     }
