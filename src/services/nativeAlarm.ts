@@ -1,6 +1,6 @@
 import { registerPlugin, Capacitor } from '@capacitor/core';
 import { ReminderItem } from '../types/reminder';
-import { parseDateTime } from '../utils/dateUtils';
+import { parseDateTime, parseNoticesString } from '../utils/dateUtils';
 
 /**
  * TypeScript interface for the custom Native Android AlarmClock Plugin.
@@ -99,6 +99,7 @@ export const setSystemClockAlarm = (hour: number, minute: number, title: string)
 /**
  * Schedule a native reminder in Android AlarmManager.setAlarmClock.
  * Guaranteed to wake device and play custom MP3 even when app is killed or screen is OFF.
+ * Also schedules native AlarmClock alarms for all configured advance notices (事前通知)!
  */
 export const scheduleNativeReminder = async (item: ReminderItem) => {
   if (!Capacitor.isNativePlatform()) {
@@ -117,7 +118,44 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
 
   if (!targetDate) return;
 
-  let mainTimestamp = targetDate.getTime();
+  const targetTimestamp = targetDate.getTime();
+  const volume = (item as any).volume !== undefined ? (item as any).volume : 70;
+  const duration = item.duration || 15;
+
+  // 1. Cancel previous alarms for this reminder and its notices
+  await cancelNativeReminder(item);
+
+  // 2. Schedule Native Alarms for Advance Notices (事前通知)
+  if (item.notices && item.notices !== 'なし' && !item.snoozed_until) {
+    const parsedNotices = parseNoticesString(item.notices);
+    for (let i = 0; i < parsedNotices.length; i++) {
+      const notice = parsedNotices[i];
+      const noticeTimestamp = targetTimestamp - notice.sec * 1000;
+
+      // Only schedule if notice time is in the future (at least 5s ahead)
+      if (noticeTimestamp > now + 5000) {
+        try {
+          await NativeAlarm.scheduleAlarm({
+            id: `${item.id}_notice_${i}`,
+            title: `📢【事前通知 ${notice.label}】${item.title}`,
+            memo: item.memo
+              ? `${item.memo}\n(予定時刻: ${item.target_time})`
+              : `予定時刻: ${item.target_time}（${notice.label}）`,
+            timestamp: noticeTimestamp,
+            audioBase64: item.custom_sound_url,
+            duration,
+            volume,
+          });
+          console.log(`[NativeAlarm] Scheduled notice alarm for "${item.title}" (${notice.label}) at ${noticeTimestamp}`);
+        } catch (err) {
+          console.warn('[NativeAlarm] Failed to schedule notice alarm:', err);
+        }
+      }
+    }
+  }
+
+  // 3. Schedule Main Scheduled Alarm (本番予定時刻)
+  let mainTimestamp = targetTimestamp;
 
   // If set to current minute (past within 60s), schedule 5 seconds in future
   if (mainTimestamp <= now) {
@@ -136,8 +174,8 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
       memo: item.memo,
       timestamp: mainTimestamp,
       audioBase64: item.custom_sound_url,
-      duration: item.duration || 15,
-      volume: (item as any).volume !== undefined ? (item as any).volume : 70,
+      duration,
+      volume,
     });
     console.log(`[NativeAlarm] Scheduled exact AlarmClock for "${item.title}" at ${mainTimestamp}`);
   } catch (err) {
@@ -146,7 +184,7 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
 };
 
 /**
- * Cancel a scheduled native alarm
+ * Cancel a scheduled native alarm and all associated advance notices
  */
 export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
   if (!Capacitor.isNativePlatform()) {
@@ -155,7 +193,12 @@ export const cancelNativeReminder = async (itemOrId: ReminderItem | string) => {
 
   const id = typeof itemOrId === 'string' ? itemOrId : itemOrId.id;
   try {
+    // Cancel main alarm
     await NativeAlarm.cancelAlarm({ id });
+    // Cancel any associated advance notice alarms (support up to 10 notices)
+    for (let i = 0; i < 10; i++) {
+      await NativeAlarm.cancelAlarm({ id: `${id}_notice_${i}` });
+    }
   } catch (err) {
     console.warn('[NativeAlarm] Failed to cancel native alarm:', err);
   }
@@ -178,7 +221,6 @@ export const stopNativeAlarm = async () => {
 
 /**
  * Schedule an instant 10-second test alarm.
- * Allows user to tap, immediately kill the app, turn screen OFF, and verify it rings in 10s.
  */
 export const scheduleQuickTestAlarm = async (delaySeconds = 10, audioBase64?: string): Promise<boolean> => {
   if (!Capacitor.isNativePlatform()) {
