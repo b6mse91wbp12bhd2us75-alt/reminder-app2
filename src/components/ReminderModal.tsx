@@ -54,7 +54,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [sound, setSound] = useState<string>(PRESET_SOUNDS[0].name);
   const [customSoundUrl, setCustomSoundUrl] = useState<string | undefined>(undefined);
   const [customSoundName, setCustomSoundName] = useState<string | undefined>(undefined);
-  const [volume, setVolume] = useState<number>(70); // 0〜100% (0 = 消音/バイブのみ)
+  const [volume, setVolume] = useState<number>(70); // 0〜100%
   const [isPlayingTest, setIsPlayingTest] = useState(false);
   const [soundFeedback, setSoundFeedback] = useState<string | null>(null);
 
@@ -75,9 +75,11 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setTitle(targetItem.title || '');
       setMemo(targetItem.memo || '');
       setSyncWithGoogle(!!targetItem.google_event_id);
-      setSound(targetItem.sound || PRESET_SOUNDS[0].name);
-      setCustomSoundUrl(targetItem.custom_sound_url);
-      setCustomSoundName(targetItem.custom_sound_name);
+      const currentSound = targetItem.sound || PRESET_SOUNDS[0].name;
+      setSound(currentSound);
+      const matched = customSounds.find((cs) => cs.name === currentSound);
+      setCustomSoundUrl(matched ? matched.url : targetItem.custom_sound_url);
+      setCustomSoundName(matched ? matched.name : targetItem.custom_sound_name);
       setVolume((targetItem as any)?.volume !== undefined ? (targetItem as any).volume : 70);
       setSnoozeMin(targetItem.snooze_min ? targetItem.snooze_min.toString() : '5');
       setDurationSec(targetItem.duration !== undefined ? targetItem.duration.toString() : '5');
@@ -143,7 +145,6 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setDurationSec('5');
       setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
 
-      // Default to CURRENT EXACT TIME
       setYear(currentNow.getFullYear().toString());
       setMonth(padZero(currentNow.getMonth() + 1));
       setDay(padZero(currentNow.getDate()));
@@ -161,7 +162,6 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const hourOptions = Array.from({ length: 24 }, (_, i) => padZero(i));
   const minuteOptions = Array.from({ length: 60 }, (_, i) => padZero(i));
 
-  // Quick date presets
   const applyQuickDate = (type: 'today' | 'tomorrow' | 'weekend') => {
     const d = new Date();
     if (type === 'tomorrow') {
@@ -176,7 +176,6 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     setDay(padZero(d.getDate()));
   };
 
-  // Quick timer preset (now, +5m, +10m, +15m, +30m, +1h)
   const setQuickTimer = (mins: number) => {
     const d = new Date();
     if (mins > 0) {
@@ -294,6 +293,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       .map((n) => `${Number(n.value)}${n.unit}`);
     const noticesStr = validNotices.length > 0 ? validNotices.join(', ') : 'なし';
 
+    const matchedSound = customSounds.find((cs) => cs.name === sound);
+    const soundUrl = matchedSound ? matchedSound.url : customSoundUrl;
+
     const reminderData: ReminderItem = {
       id: targetItem?.id || `rem-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       title: title.trim(),
@@ -302,8 +304,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       repeat: finalRepeat,
       notices: noticesStr,
       sound,
-      custom_sound_url: customSoundUrl,
-      custom_sound_name: customSoundName,
+      custom_sound_url: soundUrl,
+      custom_sound_name: customSoundName || (matchedSound ? matchedSound.name : undefined),
       volume,
       snooze_min: parseInt(snoozeMin, 10) || 5,
       duration: parseInt(durationSec, 10) >= 0 ? parseInt(durationSec, 10) : 5,
