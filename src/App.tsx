@@ -49,7 +49,7 @@ export default function App() {
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
   const [activeAlarm, setActiveAlarm] = useState<TriggeredAlarm | null>(null);
 
-  // Selection & Export state (リマインダーから選択式でGoogleカレンダーに送る)
+  // Selection & Export state
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedReminderIds, setSelectedReminderIds] = useState<Set<string>>(new Set());
   const [isBatchExporting, setIsBatchExporting] = useState(false);
@@ -102,18 +102,18 @@ export default function App() {
       }
     } else {
       const now = new Date();
-      const inFiveMin = new Date(now.getTime() + 5 * 60 * 1000);
+      const inTenMin = new Date(now.getTime() + 10 * 60 * 1000);
       const defaultReminders: ReminderItem[] = [
         {
           id: 'sample-1',
-          title: '💊 朝の薬を飲む',
-          memo: '食後に必ずコップ1杯の水で飲むこと',
+          title: '☕ ほっと一息リフレッシュ',
+          memo: '水分補給とお茶の時間。少し背伸びをしてリフレッシュしましょう！',
           sound: '電子音（ピピッ）',
           duration: 10,
-          repeat: '毎日',
-          notices: '5分前',
+          repeat: 'なし', // リピートなし（完了を押せばすっきりと完了タブに移動）
+          notices: '5分前', // 事前通知テスト用
           snooze_min: 5,
-          target_time: formatDateTime(inFiveMin),
+          target_time: formatDateTime(inTenMin),
           volume: 70,
         },
       ];
@@ -140,7 +140,7 @@ export default function App() {
   const updateRemindersState = (newReminders: ReminderItem[]) => {
     setReminders(newReminders);
     try {
-      // Strip huge base64 from localStorage to never exceed 5MB quota
+      // Strip huge base64 from localStorage to never exceed quota
       const sanitized = newReminders.map((r) => {
         if (r.custom_sound_url && r.custom_sound_url.length > 500) {
           return { ...r, custom_sound_url: undefined };
@@ -169,7 +169,7 @@ export default function App() {
     }
   };
 
-  // Google Calendar Push Action (100% Native Intent: opens Android Google Calendar app directly)
+  // Google Calendar Push Action (100% Native Intent)
   const handlePushToGoogleCalendar = async (item: ReminderItem) => {
     setPushingReminderId(item.id);
     try {
@@ -242,7 +242,7 @@ export default function App() {
     }
   };
 
-  // Add/Save Reminder (Robust with no quota crashes)
+  // Add/Save Reminder
   const handleSaveReminder = async (item: ReminderItem) => {
     let updated: ReminderItem[];
     if (isEditingFromCompleted) {
@@ -351,7 +351,7 @@ export default function App() {
     });
   };
 
-  // Audio additions preserved properly in IndexedDB
+  // Audio additions preserved in IndexedDB
   const handleAddCustomSounds = async (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
     for (const ns of newSounds) {
       await saveCustomSound({
@@ -395,7 +395,7 @@ export default function App() {
     <div className="min-h-screen bg-[#1a202c] text-white flex flex-col items-center">
       {/* Main Container - Mobile Responsive */}
       <div className={`w-full ${isFramed ? 'max-w-[430px]' : 'max-w-2xl'} min-h-screen flex flex-col bg-[#242e3d] shadow-2xl relative border-x border-gray-700/60`}>
-        {/* Header (Clean: Title, 最新化, 説明書) */}
+        {/* Header */}
         <Header
           onOpenPhoneModal={() => setIsPhoneModalOpen(true)}
           isFramed={isFramed}
@@ -494,7 +494,7 @@ export default function App() {
                 <span className="text-5xl block animate-bounce">🔔</span>
                 <p className="font-bold text-base text-gray-300">登録されたリマインダーはありません</p>
                 <p className="text-xs text-gray-500 max-w-xs mx-auto">
-                  下の「＋ 予定を追加する」ボタンから、アラーム予定を作成できます。
+                  下の「予定を追加する」ボタンから、アラーム予定を作成できます。
                 </p>
               </div>
             ) : (
@@ -652,7 +652,7 @@ export default function App() {
               className="pointer-events-auto w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 active:scale-98 text-white font-bold text-base shadow-xl flex items-center justify-center gap-2 transition cursor-pointer border border-blue-400/40"
             >
               <Plus className="w-5 h-5 stroke-[3]" />
-              <span>＋ 予定を追加する</span>
+              <span>予定を追加する</span>
             </button>
           </div>
         )}
