@@ -2,7 +2,6 @@ import React from 'react';
 import { ReminderItem } from '../types/reminder';
 import { getJapaneseDayOfWeek } from '../utils/dateUtils';
 import { Edit3, Check, Calendar, Bell, Repeat, FileText, Send, CheckCircle2, RefreshCw, XCircle, ExternalLink } from 'lucide-react';
-import { createGoogleCalendarWebUrl } from '../services/calendar';
 
 interface ReminderCardProps {
   reminder: ReminderItem;
