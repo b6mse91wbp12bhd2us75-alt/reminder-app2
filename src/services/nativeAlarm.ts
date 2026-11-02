@@ -1,7 +1,6 @@
 import { registerPlugin, Capacitor } from '@capacitor/core';
 import { ReminderItem } from '../types/reminder';
 import { parseDateTime } from '../utils/dateUtils';
-import { createGoogleCalendarWebUrl } from './calendar';
 
 /**
  * TypeScript interface for the custom Native Android AlarmClock Plugin.
@@ -68,9 +67,21 @@ export const openAndroidCalendarEvent = async (item: {
     }
   }
 
-  // Fallback (for PC/preview): open universal web calendar URL
-  const url = createGoogleCalendarWebUrl(item.title, item.memo || '', item.target_time);
-  window.open(url, '_blank');
+  // Fallback (for browser/preview): open Google Calendar URL directly
+  try {
+    const [datePart, timePart = '09:00'] = item.target_time.trim().split(' ');
+    const [year, month, day] = datePart.split('-');
+    const [hour, minute] = timePart.split(':');
+    const startStr = `${year}${month.padStart(2, '0')}${day.padStart(2, '0')}T${hour.padStart(2, '0')}${minute.padStart(2, '0')}00`;
+    const sDate = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
+    const eDate = new Date(sDate.getTime() + 60 * 60 * 1000);
+    const endStr = `${eDate.getFullYear()}${String(eDate.getMonth() + 1).padStart(2, '0')}${String(eDate.getDate()).padStart(2, '0')}T${String(eDate.getHours()).padStart(2, '0')}${String(eDate.getMinutes()).padStart(2, '0')}00`;
+    const details = item.memo ? `${item.memo}\n\n[リマインダー連携アプリから登録]` : '[リマインダー連携アプリから登録]';
+    const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(item.title)}&dates=${startStr}/${endStr}&details=${encodeURIComponent(details)}`;
+    window.open(url, '_blank');
+  } catch (e) {
+    // fallback
+  }
   return true;
 };
 
