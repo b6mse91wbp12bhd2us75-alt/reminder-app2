@@ -5,16 +5,8 @@ import { ReminderCard } from './components/ReminderCard';
 import { CompletedCard } from './components/CompletedCard';
 import { ReminderModal } from './components/ReminderModal';
 import { AlarmModal } from './components/AlarmModal';
-import { GoogleSyncModal } from './components/GoogleSyncModal';
 import { PhoneShareModal } from './components/PhoneShareModal';
-import { AndroidApkModal } from './components/AndroidApkModal';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
-import { initAuth, googleSignIn, logout, getAccessToken } from './services/firebase';
-import {
-  saveToGoogleCalendar,
-  deleteFromGoogleCalendar,
-  pushReminderToGoogleCalendar,
-} from './services/calendar';
 import { playAlarmSound, stopAlarmSound } from './services/audio';
 import { requestNotificationPermission, sendSystemNotification } from './services/notifications';
 import {
@@ -24,9 +16,7 @@ import {
   parseNoticesString,
   calculateNextOccurrence,
 } from './utils/dateUtils';
-import { User } from 'firebase/auth';
-import { Plus, CheckCircle2, AlertTriangle, Trash2, LogOut, Send, CheckSquare } from 'lucide-react';
-import { Capacitor } from '@capacitor/core';
+import { Plus, CheckCircle2, AlertTriangle, Trash2, Send, CheckSquare } from 'lucide-react';
 import {
   initNativeAlarmSystem,
   scheduleNativeReminder,
@@ -43,26 +33,23 @@ import {
 
 const STORAGE_REMINDERS_KEY = 'reminder_app_reminders_v2';
 const STORAGE_COMPLETED_KEY = 'reminder_app_completed_v2';
-const STORAGE_SOUNDS_KEY = 'reminder_app_custom_sounds_v2';
 
 export default function App() {
   const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [completed, setCompleted] = useState<ReminderItem[]>([]);
   const [currentTab, setCurrentTab] = useState<'schedule' | 'completed'>('schedule');
 
-  // Custom sounds (MP3 uploads)
+  // Custom sounds (MP3 uploads preserved in IndexedDB)
   const [customSounds, setCustomSounds] = useState<{ name: string; url: string }[]>([]);
 
   // Modals state
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ReminderItem | null>(null);
   const [isEditingFromCompleted, setIsEditingFromCompleted] = useState(false);
-  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [isPhoneModalOpen, setIsPhoneModalOpen] = useState(false);
-  const [isApkModalOpen, setIsApkModalOpen] = useState(false);
   const [activeAlarm, setActiveAlarm] = useState<TriggeredAlarm | null>(null);
 
-  // Selection & Export state
+  // Selection & Export state (リマインダーから選択式でGoogleカレンダーに送る)
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedReminderIds, setSelectedReminderIds] = useState<Set<string>>(new Set());
   const [isBatchExporting, setIsBatchExporting] = useState(false);
@@ -81,10 +68,6 @@ export default function App() {
     onConfirm: () => {},
   });
 
-  // Auth state
-  const [user, setUser] = useState<User | null>(null);
-  const [hasToken, setHasToken] = useState(false);
-
   // Notification toast message state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = (msg: string) => {
@@ -99,6 +82,13 @@ export default function App() {
 
   // 1. Initial Load from LocalStorage & IndexedDB
   useEffect(() => {
+    // Load custom sounds from IndexedDB
+    getAllCustomSounds().then((sounds) => {
+      if (sounds && sounds.length > 0) {
+        setCustomSounds(sounds);
+      }
+    });
+
     const savedReminders = localStorage.getItem(STORAGE_REMINDERS_KEY);
     const savedCompleted = localStorage.getItem(STORAGE_COMPLETED_KEY);
 
@@ -128,7 +118,9 @@ export default function App() {
         },
       ];
       setReminders(defaultReminders);
-      localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(defaultReminders));
+      try {
+        localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(defaultReminders));
+      } catch {}
       syncAllNativeReminders(defaultReminders);
     }
 
@@ -140,44 +132,41 @@ export default function App() {
       }
     }
 
-    // Load custom sounds from IndexedDB
-    getAllCustomSounds().then((sounds) => {
-      if (sounds && sounds.length > 0) {
-        setCustomSounds(sounds);
-      } else {
-        const legacySounds = localStorage.getItem(STORAGE_SOUNDS_KEY);
-        if (legacySounds) {
-          try {
-            const parsed = JSON.parse(legacySounds);
-            setCustomSounds(parsed);
-          } catch (e) {
-            console.error('Failed to parse legacy sounds', e);
-          }
-        }
-      }
-    });
-
     initNativeAlarmSystem();
     requestNotificationPermission();
-
-    const unsubscribe = initAuth((currentUser) => {
-      setUser(currentUser);
-      getAccessToken().then((token) => setHasToken(!!token));
-    });
-
-    return () => unsubscribe();
   }, []);
 
   // Save changes to localStorage & sync Android AlarmClock
   const updateRemindersState = (newReminders: ReminderItem[]) => {
     setReminders(newReminders);
-    localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(newReminders));
+    try {
+      // Strip huge base64 from localStorage to never exceed 5MB quota
+      const sanitized = newReminders.map((r) => {
+        if (r.custom_sound_url && r.custom_sound_url.length > 500) {
+          return { ...r, custom_sound_url: undefined };
+        }
+        return r;
+      });
+      localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(sanitized));
+    } catch (e) {
+      console.warn('LocalStorage save failed:', e);
+    }
     syncAllNativeReminders(newReminders);
   };
 
   const updateCompletedState = (newCompleted: ReminderItem[]) => {
     setCompleted(newCompleted);
-    localStorage.setItem(STORAGE_COMPLETED_KEY, JSON.stringify(newCompleted));
+    try {
+      const sanitized = newCompleted.map((r) => {
+        if (r.custom_sound_url && r.custom_sound_url.length > 500) {
+          return { ...r, custom_sound_url: undefined };
+        }
+        return r;
+      });
+      localStorage.setItem(STORAGE_COMPLETED_KEY, JSON.stringify(sanitized));
+    } catch (e) {
+      console.warn('LocalStorage save failed:', e);
+    }
   };
 
   // Google Calendar Push Action (100% Native Intent: opens Android Google Calendar app directly)
@@ -253,20 +242,21 @@ export default function App() {
     }
   };
 
-  // Add/Save Reminder
+  // Add/Save Reminder (Robust with no quota crashes)
   const handleSaveReminder = async (item: ReminderItem) => {
     let updated: ReminderItem[];
     if (isEditingFromCompleted) {
       const remainingCompleted = completed.filter((c) => c.id !== item.id);
       updateCompletedState(remainingCompleted);
-      updated = [...reminders.filter((r) => r.id !== item.id), item];
+      updated = [item, ...reminders.filter((r) => r.id !== item.id)];
       setIsEditingFromCompleted(false);
     } else {
-      const exists = reminders.some((r) => r.id === item.id);
-      if (exists) {
-        updated = reminders.map((r) => (r.id === item.id ? item : r));
+      const existsIndex = reminders.findIndex((r) => r.id === item.id);
+      if (existsIndex >= 0) {
+        updated = [...reminders];
+        updated[existsIndex] = item;
       } else {
-        updated = [...reminders, item];
+        updated = [item, ...reminders];
       }
     }
 
@@ -328,6 +318,7 @@ export default function App() {
 
     updateCompletedState(updatedCompleted);
     updateRemindersState(updatedReminders);
+    scheduleNativeReminder(restoredItem);
     showToast(`↩️ 「${item.title}」を予定表に戻しました`);
   };
 
@@ -360,22 +351,28 @@ export default function App() {
     });
   };
 
-  // Audio additions
-  const handleAddCustomSounds = (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
-    newSounds.forEach((s) => {
-      saveCustomSound(s.name, s.url, s.size, s.mimeType);
-    });
-    setCustomSounds((prev) => {
-      const map = new Map(prev.map((item) => [item.name, item]));
-      newSounds.forEach((ns) => map.set(ns.name, { name: ns.name, url: ns.url }));
-      const merged = Array.from(map.values());
-      return merged;
-    });
+  // Audio additions preserved properly in IndexedDB
+  const handleAddCustomSounds = async (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
+    for (const ns of newSounds) {
+      await saveCustomSound({
+        id: `sound-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        name: ns.name,
+        url: ns.url,
+        mimeType: ns.mimeType || 'audio/mpeg',
+        size: ns.size || ns.url.length,
+        createdAt: Date.now(),
+      }).catch((e) => console.warn('Failed to save to IndexedDB:', e));
+    }
+    const all = await getAllCustomSounds();
+    setCustomSounds(all);
+    showToast(`🎵 音源「${newSounds[0]?.name}」を保存しました`);
   };
 
-  const handleDeleteCustomSound = (name: string) => {
-    deleteCustomSound(name);
-    setCustomSounds((prev) => prev.filter((s) => s.name !== name));
+  const handleDeleteCustomSound = async (name: string) => {
+    await deleteCustomSound(name);
+    const all = await getAllCustomSounds();
+    setCustomSounds(all);
+    showToast(`音源「${name}」を削除しました`);
   };
 
   // Categorize schedule items
@@ -398,13 +395,11 @@ export default function App() {
     <div className="min-h-screen bg-[#1a202c] text-white flex flex-col items-center">
       {/* Main Container - Mobile Responsive */}
       <div className={`w-full ${isFramed ? 'max-w-[430px]' : 'max-w-2xl'} min-h-screen flex flex-col bg-[#242e3d] shadow-2xl relative border-x border-gray-700/60`}>
-        {/* Header */}
+        {/* Header (Clean: Title, 最新化, 説明書) */}
         <Header
-          user={user}
-          hasCalendarToken={hasToken}
-          onOpenGoogleSync={() => setIsSyncModalOpen(true)}
-          onOpenPhoneShare={() => setIsPhoneModalOpen(true)}
-          onOpenAndroidApk={() => setIsApkModalOpen(true)}
+          onOpenPhoneModal={() => setIsPhoneModalOpen(true)}
+          isFramed={isFramed}
+          onToggleFrame={() => setIsFramed(!isFramed)}
         />
 
         {/* Navigation Tabs */}
@@ -499,7 +494,7 @@ export default function App() {
                 <span className="text-5xl block animate-bounce">🔔</span>
                 <p className="font-bold text-base text-gray-300">登録されたリマインダーはありません</p>
                 <p className="text-xs text-gray-500 max-w-xs mx-auto">
-                  下の「＋ 予定を追加」ボタンから、アラーム予定を作成できます。
+                  下の「＋ 予定を追加する」ボタンから、アラーム予定を作成できます。
                 </p>
               </div>
             ) : (
@@ -629,7 +624,7 @@ export default function App() {
                 {completed.map((item) => (
                   <CompletedCard
                     key={item.id}
-                    reminder={item}
+                    item={item}
                     onRestore={handleRestoreReminder}
                     onDelete={handleDeleteCompleted}
                     onEdit={(r) => {
@@ -680,12 +675,6 @@ export default function App() {
         }}
         onSave={handleSaveReminder}
         targetItem={editingItem}
-        user={user}
-        onGoogleSignIn={async () => {
-          await googleSignIn();
-          const t = await getAccessToken();
-          setHasToken(!!t);
-        }}
         customSounds={customSounds}
         onAddCustomSounds={handleAddCustomSounds}
         onDeleteCustomSound={handleDeleteCustomSound}
@@ -699,31 +688,24 @@ export default function App() {
           stopNativeAlarm();
           setActiveAlarm(null);
         }}
-        onSnooze={() => {
+        onSnooze={(alarmData) => {
           stopAlarmSound();
           stopNativeAlarm();
           setActiveAlarm(null);
+          const item = alarmData.reminder;
+          const snoozeMin = item.snooze_min || 5;
+          const nextTime = new Date(Date.now() + snoozeMin * 60 * 1000);
+          const updated = reminders.map((r) =>
+            r.id === item.id ? { ...r, snoozed_until: formatDateTime(nextTime) } : r
+          );
+          updateRemindersState(updated);
+          showToast(`💤 ${snoozeMin}分間スヌーズしました`);
         }}
-      />
-
-      {/* Google Account & Calendar Sync Settings Modal */}
-      <GoogleSyncModal
-        isOpen={isSyncModalOpen}
-        onClose={() => setIsSyncModalOpen(false)}
-        user={user}
-        hasToken={hasToken}
-        onSignIn={async () => {
-          await googleSignIn();
-          const t = await getAccessToken();
-          setHasToken(!!t);
-        }}
-        onSignOut={async () => {
-          await logout();
-          setUser(null);
-          setHasToken(false);
-        }}
-        onImportEvents={async () => {
-          // Calendar import handled
+        onCompleteDirectly={(alarmData) => {
+          stopAlarmSound();
+          stopNativeAlarm();
+          setActiveAlarm(null);
+          handleCompleteReminder(alarmData.reminder);
         }}
       />
 
@@ -731,12 +713,6 @@ export default function App() {
       <PhoneShareModal
         isOpen={isPhoneModalOpen}
         onClose={() => setIsPhoneModalOpen(false)}
-      />
-
-      {/* Android Native APK Package & Guide Modal */}
-      <AndroidApkModal
-        isOpen={isApkModalOpen}
-        onClose={() => setIsApkModalOpen(false)}
       />
 
       {/* Confirmation Dialog for Destructive Operations */}
