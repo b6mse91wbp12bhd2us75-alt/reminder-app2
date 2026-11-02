@@ -1,7 +1,8 @@
 import React from 'react';
 import { ReminderItem } from '../types/reminder';
 import { getJapaneseDayOfWeek } from '../utils/dateUtils';
-import { Edit3, Check, Calendar, Bell, Repeat, FileText, Send, CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
+import { Edit3, Check, Calendar, Bell, Repeat, FileText, Send, CheckCircle2, RefreshCw, XCircle, ExternalLink } from 'lucide-react';
+import { createGoogleCalendarWebUrl } from '../services/calendar';
 
 interface ReminderCardProps {
   reminder: ReminderItem;
@@ -209,10 +210,10 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                   onPushToCalendar(reminder);
                 }}
                 disabled={isPushingCalendar}
-                className="w-full sm:w-auto px-3 py-1.5 rounded-xl bg-[#2a4365] hover:bg-[#2b6cb0] active:scale-95 text-blue-100 text-xs font-bold border border-blue-500/50 transition shadow-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
-                title="この予定だけをGoogleカレンダーに送信して追加"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-sky-700 hover:from-blue-600 hover:to-sky-600 active:scale-95 text-white text-xs font-bold border border-blue-400/50 transition shadow-sm cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                title="スマホ本体のGoogleカレンダーにこの予定を送信して追加"
               >
-                <Send className={`w-3.5 h-3.5 text-blue-300 ${isPushingCalendar ? 'animate-spin' : ''}`} />
+                <Calendar className="w-4 h-4 text-blue-200" />
                 <span>{isPushingCalendar ? '送信中...' : '📅 Googleカレンダーに送る'}</span>
               </button>
             </div>
