@@ -16,7 +16,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 
 /**
- * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock with volume support.
+ * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
+ * and native file saving for custom MP3 external audio files.
  */
 @CapacitorPlugin(name = "NativeAlarm")
 public class NativeAlarmPlugin extends Plugin {
@@ -75,6 +76,7 @@ public class NativeAlarmPlugin extends Plugin {
             pendingIntent.cancel();
         }
 
+        // Delete associated audio file if exists
         try {
             File audioFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
             if (audioFile.exists()) {
@@ -99,6 +101,60 @@ public class NativeAlarmPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    @PluginMethod
+    public void openCalendarEvent(PluginCall call) {
+        String title = call.getString("title", "リマインダー");
+        String memo = call.getString("memo", "");
+        Long startTime = call.getLong("startTime");
+        Long endTime = call.getLong("endTime");
+
+        try {
+            Context context = getContext();
+            Intent intent = new Intent(Intent.ACTION_INSERT);
+            intent.setData(android.provider.CalendarContract.Events.CONTENT_URI);
+            if (title != null) intent.putExtra(android.provider.CalendarContract.Events.TITLE, title);
+            if (memo != null) intent.putExtra(android.provider.CalendarContract.Events.DESCRIPTION, memo);
+            if (startTime != null && startTime > 0) {
+                intent.putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, startTime);
+            }
+            if (endTime != null && endTime > 0) {
+                intent.putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, endTime);
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            context.startActivity(intent);
+
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to open native calendar", e);
+            call.reject("カレンダーの起動に失敗しました: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void testAlarmNow(PluginCall call) {
+        int delaySeconds = call.getInt("delaySeconds", 10);
+        String title = call.getString("title", "【テスト成功】大音量アラーム");
+        String memo = call.getString("memo", "アプリを完全に閉じた状態での発火テストに成功しました！");
+        String audioBase64 = call.getString("audioBase64");
+
+        Integer volume = call.getInt("volume", 70);
+
+        long targetTime = System.currentTimeMillis() + (delaySeconds * 1000L);
+
+        try {
+            executeScheduleAlarm("quick_test_alarm", title, memo, targetTime, audioBase64, 15, volume != null ? volume : 70);
+            JSObject ret = new JSObject();
+            ret.put("success", true);
+            call.resolve(ret);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed test alarm", e);
+            call.reject("Failed test alarm: " + e.getMessage());
+        }
+    }
+
     private String executeScheduleAlarm(String id, String title, String memo, long timestamp, String audioBase64, int duration, int volume) throws Exception {
         Context context = getContext();
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
@@ -106,6 +162,7 @@ public class NativeAlarmPlugin extends Plugin {
             throw new IllegalStateException("AlarmManager not available");
         }
 
+        // Save custom audio file if provided
         String audioFilePath = null;
         if (audioBase64 != null && !audioBase64.isEmpty()) {
             audioFilePath = saveBase64ToFile(context, id, audioBase64);
@@ -113,6 +170,7 @@ public class NativeAlarmPlugin extends Plugin {
 
         int requestCode = Math.abs(id.hashCode());
 
+        // 1. Intent when user clicks alarm notification
         Intent showIntent = new Intent(context, MainActivity.class);
         showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(
@@ -122,6 +180,7 @@ public class NativeAlarmPlugin extends Plugin {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        // 2. Intent delivered to AlarmReceiver
         Intent alarmIntent = new Intent(context, AlarmReceiver.class);
         alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
         alarmIntent.putExtra("ID", id);
@@ -138,9 +197,10 @@ public class NativeAlarmPlugin extends Plugin {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        // 3. Schedule via setAlarmClock (Highest priority in Android OS)
         AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
         alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-        Log.d(TAG, "Scheduled native AlarmClock with volume=" + volume + "% for: " + id);
+        Log.d(TAG, "Scheduled native AlarmClock for ID: " + id + " at: " + timestamp);
 
         return audioFilePath;
     }
@@ -162,9 +222,10 @@ public class NativeAlarmPlugin extends Plugin {
             fos.flush();
             fos.close();
 
+            Log.d(TAG, "Saved custom audio file to: " + destFile.getAbsolutePath());
             return destFile.getAbsolutePath();
         } catch (Exception e) {
-            Log.e(TAG, "Failed to save base64 audio", e);
+            Log.e(TAG, "Failed to save base64 audio to file", e);
             return null;
         }
     }
