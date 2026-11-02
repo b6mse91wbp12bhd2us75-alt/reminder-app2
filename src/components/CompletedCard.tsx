@@ -3,16 +3,23 @@ import { ReminderItem } from '../types/reminder';
 import { CheckCircle2, Edit3, Trash2, Calendar, FileText } from 'lucide-react';
 
 interface CompletedCardProps {
-  item: ReminderItem;
+  item?: ReminderItem;
+  reminder?: ReminderItem;
   onEdit: (item: ReminderItem) => void;
   onDelete: (item: ReminderItem) => void;
+  onRestore?: (item: ReminderItem) => void;
 }
 
 export const CompletedCard: React.FC<CompletedCardProps> = ({
-  item,
+  item: propItem,
+  reminder: propReminder,
   onEdit,
   onDelete,
+  onRestore,
 }) => {
+  const item = propItem || propReminder;
+  if (!item) return null;
+
   return (
     <div className="bg-[#3a4a5e] border border-gray-600/70 rounded-2xl p-4 shadow-md transition-all">
       <div className="flex items-start justify-between gap-3">
@@ -54,11 +61,22 @@ export const CompletedCard: React.FC<CompletedCardProps> = ({
 
         {/* Right Action Buttons */}
         <div className="flex flex-col sm:flex-row items-center gap-2 shrink-0 self-center">
+          {onRestore && (
+            <button
+              type="button"
+              onClick={() => onRestore(item)}
+              className="flex items-center justify-center gap-1 px-2.5 py-2 rounded-xl bg-amber-700 hover:bg-amber-600 active:scale-95 text-white text-xs font-bold transition cursor-pointer"
+              title="予定表に戻す"
+            >
+              <span>↩️ 戻す</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => onEdit(item)}
             className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-[#2b6cb0] hover:bg-[#2c5282] active:scale-95 text-white text-xs font-bold transition cursor-pointer"
-            title="再編集または予定に戻す"
+            title="再編集"
           >
             <Edit3 className="w-3.5 h-3.5" />
             <span>編集</span>
