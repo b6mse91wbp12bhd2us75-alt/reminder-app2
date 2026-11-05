@@ -1,34 +1,47 @@
 import React from 'react';
 import { ReminderItem } from '../types/reminder';
-import { getJapaneseDayOfWeek } from '../utils/dateUtils';
+import { getJapaneseDayOfWeek, getScheduleCategory } from '../utils/dateUtils';
 import { Edit3, Check, Calendar, Bell, Repeat, FileText, Send, CheckCircle2, RefreshCw, XCircle, ExternalLink } from 'lucide-react';
 
 interface ReminderCardProps {
-  reminder: ReminderItem;
-  category: 'past' | 'today' | 'future';
+  reminder?: ReminderItem;
+  item?: ReminderItem;
+  category?: 'past' | 'today' | 'future';
   onEdit: (reminder: ReminderItem) => void;
   onComplete: (reminder: ReminderItem) => void;
   onPushToCalendar?: (reminder: ReminderItem) => void;
+  onExportToCalendar?: (reminder: ReminderItem) => void;
   onUnlinkCalendar?: (reminder: ReminderItem) => void;
+  onDelete?: (reminder: ReminderItem) => void;
   isPushingCalendar?: boolean;
+  isPushing?: boolean;
   isSelectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: (reminder: ReminderItem) => void;
 }
 
 export const ReminderCard: React.FC<ReminderCardProps> = ({
-  reminder,
-  category,
+  reminder: propReminder,
+  item: propItem,
+  category: propCategory,
   onEdit,
   onComplete,
   onPushToCalendar,
+  onExportToCalendar,
   onUnlinkCalendar,
   isPushingCalendar = false,
+  isPushing = false,
   isSelectionMode = false,
   isSelected = false,
   onToggleSelect,
 }) => {
-  const dayOfWeek = getJapaneseDayOfWeek(reminder.target_time);
+  const reminder = propReminder || propItem;
+  if (!reminder) return null;
+
+  const category = propCategory || getScheduleCategory(reminder.target_time || '');
+  const dayOfWeek = getJapaneseDayOfWeek(reminder.target_time || '');
+  const handlePush = onPushToCalendar || onExportToCalendar;
+  const isBusyPushing = isPushingCalendar || isPushing;
 
   // Time text color corresponding to Python app style
   const timeColorClass =
@@ -64,88 +77,88 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
               type="checkbox"
               checked={isSelected}
               onChange={() => onToggleSelect && onToggleSelect(reminder)}
-              className="w-5 h-5 rounded-md text-blue-600 focus:ring-blue-500 bg-gray-700 border-gray-400 cursor-pointer"
+              className="w-5 h-5 rounded border-gray-500 text-blue-600 focus:ring-blue-500 cursor-pointer"
             />
           </div>
         )}
 
-        {/* Left Information Section */}
+        {/* Main Content Area */}
         <div className="flex-1 min-w-0">
-          {/* Time & Badges */}
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mb-2">
-            <span
-              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-bold border ${timeColorClass}`}
-            >
-              <span>⏰</span>
+          {/* Top row: Target Time, Day of week, Category badge */}
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold border shadow-xs ${timeColorClass}`}>
+              <Calendar className="w-3.5 h-3.5" />
               <span>{reminder.target_time}</span>
-              <span className="text-[11px] font-normal opacity-90">{dayOfWeek}</span>
-            </span>
+              <span className="font-medium text-[11px]">{dayOfWeek}</span>
+            </div>
 
-            {/* Google Calendar Status Badge */}
-            {reminder.google_event_id ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-blue-900/70 text-blue-200 border border-blue-400/50">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                <span>カレンダー登録済</span>
-              </span>
-            ) : null}
-
-            {isImportedFromCalendar && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-900/60 text-amber-200 border border-amber-600/50">
-                <span>自動取込</span>
+            {/* Repeat tag */}
+            {reminder.repeat && reminder.repeat !== 'なし' && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold bg-purple-950/70 text-purple-300 border border-purple-700/60">
+                <Repeat className="w-3 h-3" />
+                <span>{reminder.repeat}</span>
               </span>
             )}
 
+            {/* Snoozed tag */}
             {reminder.snoozed_until && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-purple-900/60 text-purple-200 border border-purple-500/50 animate-pulse">
-                <span>💤 スヌーズ中</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold bg-amber-950/80 text-amber-300 border border-amber-600/60 animate-pulse">
+                <span>💤 スヌーズ中 ({reminder.snoozed_until.split(' ')[1]})</span>
               </span>
             )}
           </div>
 
-          {/* Title - Large font for legibility */}
-          <h4 className="text-base sm:text-lg font-bold text-white leading-snug break-words mb-1.5">
+          {/* Title */}
+          <h3 className="text-base sm:text-lg font-bold text-white tracking-wide leading-snug break-words mb-1.5">
             {reminder.title}
-          </h4>
+          </h3>
 
-          {/* Sub details: memo, repeat, notices */}
-          <div className="space-y-1 text-xs text-gray-300">
+          {/* Sub info: Sound, Notices, Memo */}
+          <div className="space-y-1.5 text-xs text-gray-300">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-gray-400">
+              <span className="inline-flex items-center gap-1">
+                <span>🎵</span>
+                <span className="text-gray-200 font-medium truncate max-w-[180px]">{reminder.sound}</span>
+              </span>
+
+              {reminder.notices && reminder.notices !== 'なし' && (
+                <span className="inline-flex items-center gap-1 text-emerald-400 font-medium">
+                  <Bell className="w-3 h-3 text-emerald-400" />
+                  <span>事前通知: {reminder.notices}</span>
+                </span>
+              )}
+
+              <span>音量: {(reminder as any).volume !== undefined ? (reminder as any).volume : 70}%</span>
+            </div>
+
+            {/* Memo text */}
             {reminder.memo && (
-              <div className="flex items-start gap-1.5 text-gray-200 bg-black/15 p-2 rounded-lg">
+              <div className="flex items-start gap-1.5 text-gray-200 bg-black/20 p-2.5 rounded-xl border border-gray-700/40 mt-1">
                 <FileText className="w-3.5 h-3.5 text-gray-400 mt-0.5 shrink-0" />
                 <span className="whitespace-pre-line leading-relaxed break-words">{reminder.memo}</span>
               </div>
             )}
-
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-gray-300 pt-0.5">
-              <span className="inline-flex items-center gap-1">
-                <Repeat className="w-3 h-3 text-gray-400" />
-                <span>繰返: <strong className="text-gray-100">{reminder.repeat || 'なし'}</strong></span>
-              </span>
-
-              <span className="inline-flex items-center gap-1">
-                <Bell className="w-3 h-3 text-gray-400" />
-                <span>通知: <strong className="text-gray-100">{reminder.notices || 'なし'}</strong></span>
-              </span>
-            </div>
           </div>
         </div>
 
-        {/* Right Actions Section (Edit & Complete) */}
+        {/* Right Action Buttons */}
         {!isSelectionMode && (
-          <div className="flex flex-col gap-1.5 shrink-0 self-start">
+          <div className="flex flex-col gap-2 shrink-0 self-center">
+            {/* Complete Button */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onComplete(reminder);
               }}
-              className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-600 active:scale-95 text-white text-xs font-bold transition shadow-sm cursor-pointer"
+              className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white text-xs font-bold transition shadow-sm cursor-pointer border border-emerald-400/40"
               title="予定を完了にする"
             >
-              <Check className="w-4 h-4 stroke-[3]" />
+              <Check className="w-3.5 h-3.5 stroke-[3]" />
               <span>完了</span>
             </button>
 
+            {/* Edit Button */}
             <button
               type="button"
               onClick={(e) => {
@@ -163,7 +176,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
       </div>
 
       {/* Selective Google Calendar Export Action Bar (Per-Card) */}
-      {!isSelectionMode && onPushToCalendar && (
+      {!isSelectionMode && handlePush && (
         <div className="mt-3 pt-2.5 border-t border-gray-600/50 flex flex-wrap items-center justify-between gap-2">
           {reminder.google_event_id ? (
             <div className="flex items-center gap-2 w-full justify-between">
@@ -176,14 +189,14 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onPushToCalendar(reminder);
+                    handlePush(reminder);
                   }}
-                  disabled={isPushingCalendar}
+                  disabled={isBusyPushing}
                   className="px-2.5 py-1 rounded-lg bg-blue-900/60 hover:bg-blue-800 text-blue-200 border border-blue-500/50 text-[11px] font-bold transition cursor-pointer flex items-center gap-1 disabled:opacity-50"
                   title="Googleカレンダーの内容を再更新・再送信"
                 >
-                  <RefreshCw className={`w-3 h-3 ${isPushingCalendar ? 'animate-spin' : ''}`} />
-                  <span>{isPushingCalendar ? '更新中...' : '再送信'}</span>
+                  <RefreshCw className={`w-3 h-3 ${isBusyPushing ? 'animate-spin' : ''}`} />
+                  <span>{isBusyPushing ? '更新中...' : '再送信'}</span>
                 </button>
                 {onUnlinkCalendar && (
                   <button
@@ -206,14 +219,14 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onPushToCalendar(reminder);
+                  handlePush(reminder);
                 }}
-                disabled={isPushingCalendar}
+                disabled={isBusyPushing}
                 className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-sky-700 hover:from-blue-600 hover:to-sky-600 active:scale-95 text-white text-xs font-bold border border-blue-400/50 transition shadow-sm cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                 title="スマホ本体のGoogleカレンダーにこの予定を送信して追加"
               >
                 <Calendar className="w-4 h-4 text-blue-200" />
-                <span>{isPushingCalendar ? '送信中...' : '📅 Googleカレンダーに送る'}</span>
+                <span>{isBusyPushing ? '送信中...' : '📅 Googleカレンダーに送る'}</span>
               </button>
             </div>
           )}
