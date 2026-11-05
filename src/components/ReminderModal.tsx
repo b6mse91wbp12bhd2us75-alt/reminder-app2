@@ -3,7 +3,7 @@ import { ReminderItem, NoticeOption } from '../types/reminder';
 import { PRESET_SOUNDS, previewSound, stopAlarmSound } from '../services/audio';
 import { padZero } from '../utils/dateUtils';
 import { NumberStepper } from './NumberStepper';
-import { X, Volume2, Volume1, VolumeX, Plus, Play, Square, Clock, RefreshCw, Trash2, Check, Bell } from 'lucide-react';
+import { X, Volume2, Plus, Play, Square, Clock, RefreshCw, Trash2, Check, Bell } from 'lucide-react';
 import { User } from 'firebase/auth';
 
 interface ReminderModalProps {
@@ -12,7 +12,7 @@ interface ReminderModalProps {
   onSave: (reminder: ReminderItem) => Promise<void>;
   targetItem: ReminderItem | null;
   user?: User | null;
-  onGoogleSignIn?: () => Promise<void>;
+  onGoogleSignIn?: () => Promise<any>;
   customSounds?: { name: string; url: string }[];
   onAddCustomSounds?: (sounds: { name: string; url: string; size?: number; mimeType?: string }[]) => void;
   onDeleteCustomSound?: (name: string) => void;
@@ -54,14 +54,14 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [sound, setSound] = useState<string>(PRESET_SOUNDS[0].name);
   const [customSoundUrl, setCustomSoundUrl] = useState<string | undefined>(undefined);
   const [customSoundName, setCustomSoundName] = useState<string | undefined>(undefined);
-  const [volume, setVolume] = useState<number>(70); // 0〜100%
+  const [volume, setVolume] = useState<number>(70);
   const [isPlayingTest, setIsPlayingTest] = useState(false);
   const [soundFeedback, setSoundFeedback] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Initialize or reset form
+  // Initialize form
   useEffect(() => {
     if (!isOpen) {
       stopAlarmSound();
@@ -108,8 +108,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
         setRepeatType('なし');
       }
 
-      // Parse notices
-      if (targetItem.notices && targetItem.notices !== 'なし') {
+      // Parse notices: if empty or 'なし', keep it completely EMPTY! (No resurrection of 1日前)
+      if (targetItem.notices && targetItem.notices !== 'なし' && targetItem.notices.trim() !== '') {
         const parsedList: NoticeOption[] = [];
         const parts = targetItem.notices.split(',');
         parts.forEach((p, idx) => {
@@ -126,12 +126,12 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             }
           }
         });
-        setNotices(parsedList.length > 0 ? parsedList : [{ id: 'n1', value: 1, unit: '日前' }]);
+        setNotices(parsedList);
       } else {
-        setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+        setNotices([]);
       }
     } else {
-      // New reminder defaults
+      // New reminder defaults: Default to NO advance notice!
       setTitle('');
       setMemo('');
       setSyncWithGoogle(false);
@@ -143,8 +143,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setIntervalDays('2');
       setSnoozeMin('5');
       setDurationSec('5');
-      setNotices([{ id: 'n1', value: 1, unit: '日前' }]);
+      setNotices([]);
 
+      // Current Time
       setYear(currentNow.getFullYear().toString());
       setMonth(padZero(currentNow.getMonth() + 1));
       setDay(padZero(currentNow.getDate()));
@@ -162,25 +163,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const hourOptions = Array.from({ length: 24 }, (_, i) => padZero(i));
   const minuteOptions = Array.from({ length: 60 }, (_, i) => padZero(i));
 
-  const applyQuickDate = (type: 'today' | 'tomorrow' | 'weekend') => {
+  const setQuickTimer = (offsetMinutes: number) => {
     const d = new Date();
-    if (type === 'tomorrow') {
-      d.setDate(d.getDate() + 1);
-    } else if (type === 'weekend') {
-      const dayOfWeek = d.getDay();
-      const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
-      d.setDate(d.getDate() + daysUntilSaturday);
-    }
-    setYear(d.getFullYear().toString());
-    setMonth(padZero(d.getMonth() + 1));
-    setDay(padZero(d.getDate()));
-  };
-
-  const setQuickTimer = (mins: number) => {
-    const d = new Date();
-    if (mins > 0) {
-      d.setMinutes(d.getMinutes() + mins);
-    }
+    d.setMinutes(d.getMinutes() + offsetMinutes);
     setYear(d.getFullYear().toString());
     setMonth(padZero(d.getMonth() + 1));
     setDay(padZero(d.getDate()));
@@ -193,8 +178,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       ...prev,
       {
         id: `notice-${Date.now()}-${Math.random()}`,
-        value: 1,
-        unit: '日前',
+        value: 10,
+        unit: '分前',
       },
     ]);
   };
@@ -215,8 +200,9 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
       setIsPlayingTest(false);
     } else {
       setIsPlayingTest(true);
-      previewSound(sound, customSoundUrl, volume);
-      setTimeout(() => setIsPlayingTest(false), 3500);
+      const matched = customSounds.find((cs) => cs.name === sound);
+      const urlToPlay = matched ? matched.url : customSoundUrl;
+      previewSound(sound, urlToPlay, volume);
     }
   };
 
@@ -225,14 +211,12 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     if (!files || files.length === 0) return;
 
     const file = files[0];
-    if (file.size > 25 * 1024 * 1024) {
-      alert(`「${file.name}」はファイルサイズが大きすぎます（最大25MB）。`);
+    if (!file.name.toLowerCase().endsWith('.mp3') && !file.type.includes('audio')) {
+      alert('MP3形式の音声ファイルを選択してください。');
       return;
     }
 
-    setSoundFeedback(`「${file.name}」を取り込み中...`);
     const reader = new FileReader();
-
     reader.onload = () => {
       const base64 = reader.result as string;
       if (onAddCustomSounds) {
@@ -318,105 +302,83 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     try {
       await onSave(reminderData);
       stopAlarmSound();
+      setIsPlayingTest(false);
       onClose();
-    } catch (err: any) {
-      alert(err.message || '保存に失敗しました');
+    } catch (err) {
+      console.error(err);
+      alert('保存中にエラーが発生しました。');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-[420px] bg-[#2d3748] border border-gray-600 rounded-3xl shadow-2xl flex flex-col max-h-[92vh] overflow-hidden text-white animate-in zoom-in-95 duration-150">
-        {/* Modal Header */}
-        <div className="bg-[#1a202c] px-5 py-3.5 flex items-center justify-between border-b border-gray-700/70 shrink-0">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+      <div className="w-full max-w-lg bg-[#242e3d] border border-gray-600 rounded-3xl shadow-2xl overflow-hidden text-white flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <div className="px-5 py-4 bg-[#1a202c] border-b border-gray-700/80 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
-            <span className="text-xl">{targetItem ? '✏️' : '🔔'}</span>
-            <h3 className="font-bold text-base tracking-wide text-white">
-              {targetItem ? 'リマインダー編集' : 'リマインダー作成'}
-            </h3>
+            <Clock className="w-5 h-5 text-blue-400" />
+            <h2 className="text-base sm:text-lg font-bold tracking-wide">
+              {targetItem ? '予定を編集' : '新しい予定を作成'}
+            </h2>
           </div>
           <button
             type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition cursor-pointer"
+            onClick={() => {
+              stopAlarmSound();
+              setIsPlayingTest(false);
+              onClose();
+            }}
+            className="p-1 rounded-xl text-gray-400 hover:text-white hover:bg-gray-700 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Modal Scrollable Form Body */}
-        <form
-          id="reminder-modal-form"
-          onSubmit={handleSubmit}
-          className="flex-1 overflow-y-auto px-3.5 py-3 space-y-2.5 text-sm"
-        >
-          {/* Title Input */}
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs sm:text-sm">
+          {/* Title */}
           <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1">
+              タイトル <span className="text-red-400">*</span>
+            </label>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="予定のタイトル (例: 病院の予約)"
+              placeholder="例: トマトの芽かき、朝礼、薬の服用"
+              className="w-full bg-[#3a4a5e] border border-gray-600 rounded-xl px-3 py-2 text-white placeholder-gray-400 font-bold focus:border-blue-400 focus:outline-none"
               required
-              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-2 text-base font-bold text-white placeholder-gray-400 transition"
             />
           </div>
 
-          {/* Memo Input */}
+          {/* Memo */}
           <div>
+            <label className="block text-xs font-bold text-gray-300 mb-1">
+              メモ・留意事項（省略可）
+            </label>
             <textarea
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
-              placeholder="メモ (任意)"
+              placeholder="作業手順や注意点などを入力"
               rows={2}
-              className="w-full bg-[#3a4a5e] border border-gray-600 focus:border-blue-400 focus:outline-none rounded-xl px-3.5 py-1.5 text-sm text-white placeholder-gray-400 transition resize-none"
+              className="w-full bg-[#3a4a5e] border border-gray-600 rounded-xl px-3 py-2 text-white placeholder-gray-400 font-medium focus:border-blue-400 focus:outline-none resize-none"
             />
           </div>
 
-          {/* Target Notification Date & Time */}
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5 text-blue-400" />
-                <span>通知日時</span>
-              </label>
-
-              {/* Quick Preset Buttons */}
-              <div className="flex gap-1 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => applyQuickDate('today')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
-                >
-                  今日
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyQuickDate('tomorrow')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
-                >
-                  明日
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyQuickDate('weekend')}
-                  className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 cursor-pointer text-[11px]"
-                >
-                  今週末
-                </button>
-              </div>
-            </div>
-
-            {/* Date and Time Panel */}
-            <div className="bg-[#3a4a5e] border border-gray-600 rounded-xl p-2.5 space-y-2">
+          {/* Date & Time Picker */}
+          <div className="bg-[#354356] p-3 rounded-2xl border border-gray-600 space-y-2">
+            <label className="block text-xs font-bold text-gray-200">
+              予定日時の設定
+            </label>
+            <div className="flex flex-col gap-2">
               {/* Date Row */}
-              <div className="flex items-center gap-1.5 text-sm font-bold">
+              <div className="flex items-center gap-1.5 text-sm font-bold flex-wrap">
                 <select
                   value={year}
                   onChange={(e) => setYear(e.target.value)}
-                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer"
                 >
                   {yearOptions.map((y) => (
                     <option key={y} value={y}>{y}</option>
@@ -427,7 +389,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 <select
                   value={month}
                   onChange={(e) => setMonth(e.target.value)}
-                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer"
                 >
                   {monthOptions.map((m) => (
                     <option key={m} value={m}>{m}</option>
@@ -438,7 +400,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 <select
                   value={day}
                   onChange={(e) => setDay(e.target.value)}
-                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer text-center"
+                  className="bg-[#2d3748] border border-gray-600 rounded-lg px-2 py-1 text-white font-bold cursor-pointer"
                 >
                   {dayOptions.map((d) => (
                     <option key={d} value={d}>{d}</option>
@@ -581,7 +543,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             </div>
           </div>
 
-          {/* Custom Advance Notices */}
+          {/* Advance Notices (事前通知) */}
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
@@ -635,31 +597,38 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
             </div>
           </div>
 
-          {/* Alarm Sound Selection */}
-          <div className="pb-1 space-y-1.5">
+          {/* Sound & Volume */}
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-gray-300 flex items-center gap-1">
                 <Volume2 className="w-3.5 h-3.5 text-blue-400" />
-                <span>アラーム音</span>
+                <span>音源・音量設定</span>
               </label>
-
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-bold text-xs transition cursor-pointer flex items-center gap-1 shadow-xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>外部音源を取り込む</span>
-              </button>
+              <div className="text-xs text-amber-300 font-bold">
+                音量: {volume}% {volume === 0 ? '(消音・バイブのみ)' : ''}
+              </div>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            {/* Volume Slider */}
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                value={volume}
+                onChange={(e) => setVolume(Number(e.target.value))}
+                className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg cursor-pointer"
+              />
+            </div>
+
+            {/* Sound Selector + Test / Stop button */}
+            <div className="flex items-center gap-2">
               <select
                 value={sound}
                 onChange={(e) => {
-                  const val = e.target.value;
-                  setSound(val);
-                  const matched = customSounds.find((cs) => cs.name === val);
+                  setSound(e.target.value);
+                  const matched = customSounds.find((cs) => cs.name === e.target.value);
                   if (matched) {
                     setCustomSoundUrl(matched.url);
                     setCustomSoundName(matched.name);
@@ -667,37 +636,47 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                     setCustomSoundUrl(undefined);
                     setCustomSoundName(undefined);
                   }
+                  stopAlarmSound();
+                  setIsPlayingTest(false);
                 }}
                 className="flex-1 bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-2 text-white font-bold text-xs cursor-pointer truncate"
               >
-                <optgroup label="アプリ内蔵音源">
+                <optgroup label="内蔵プリセット音">
                   {PRESET_SOUNDS.map((ps) => (
-                    <option key={ps.id} value={ps.name}>
-                      {ps.name}
-                    </option>
+                    <option key={ps.id} value={ps.name}>{ps.name}</option>
                   ))}
                 </optgroup>
-
                 {customSounds.length > 0 && (
-                  <optgroup label="取り込んだ外部音源（MP3等）">
+                  <optgroup label="取り込み済み外部音源 (保存済)">
                     {customSounds.map((cs) => (
-                      <option key={cs.name} value={cs.name}>
-                        🎵 {cs.name}
-                      </option>
+                      <option key={cs.name} value={cs.name}>🎵 {cs.name}</option>
                     ))}
                   </optgroup>
                 )}
               </select>
 
+              {/* Sound Test / Stop Button */}
               <button
                 type="button"
                 onClick={handleTestSound}
-                className={`p-2 rounded-xl border transition cursor-pointer flex items-center justify-center shrink-0 ${
-                  isPlayingTest ? 'bg-amber-600 text-white border-amber-500' : 'bg-[#2d3748] hover:bg-gray-700 text-gray-200 border-gray-600'
+                className={`px-3 py-2 rounded-xl border font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0 ${
+                  isPlayingTest
+                    ? 'bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-md animate-pulse'
+                    : 'bg-[#2d3748] hover:bg-gray-700 text-gray-200 border-gray-600'
                 }`}
-                title="テスト再生"
+                title={isPlayingTest ? '試聴を停止' : 'テスト試聴'}
               >
-                {isPlayingTest ? <Square className="w-4 h-4 fill-current text-white" /> : <Play className="w-4 h-4 fill-current text-emerald-400" />}
+                {isPlayingTest ? (
+                  <>
+                    <Square className="w-3.5 h-3.5 fill-current text-white" />
+                    <span>停止</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-current text-emerald-400" />
+                    <span>試聴</span>
+                  </>
+                )}
               </button>
 
               {customSounds.some((cs) => cs.name === sound) && (
@@ -705,132 +684,51 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                   type="button"
                   onClick={handleDeleteSelectedCustomSound}
                   className="p-2 rounded-xl bg-red-900/70 hover:bg-red-800 border border-red-700/60 text-red-200 transition cursor-pointer flex items-center justify-center shrink-0"
-                  title="削除"
+                  title="音源を削除"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
+            </div>
 
+            {/* Upload MP3 */}
+            <div>
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="audio/*"
+                accept="audio/mp3,audio/*"
                 onChange={handleFileUpload}
                 className="hidden"
               />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-2 px-3 border border-dashed border-gray-500 hover:border-blue-400 rounded-xl text-xs text-gray-300 hover:text-blue-300 bg-[#354356]/60 flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-blue-400" />
+                <span>お好みのMP3音源を取り込む（アプリに永続保存）</span>
+              </button>
             </div>
 
             {soundFeedback && (
-              <div className="text-[11px] text-emerald-300 bg-emerald-950/80 border border-emerald-600/60 px-2 py-1 rounded-lg flex items-center gap-1.5 animate-in fade-in">
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{soundFeedback}</span>
+              <div className="text-xs text-emerald-300 font-bold bg-emerald-950/80 border border-emerald-600/70 p-2 rounded-xl animate-in fade-in">
+                {soundFeedback}
               </div>
             )}
           </div>
 
-          {/* Volume Control */}
-          <div className="bg-[#242e3d] p-3 rounded-2xl border border-gray-700/70 space-y-2">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-gray-200 flex items-center gap-1.5">
-                {volume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-red-400" />
-                ) : volume <= 35 ? (
-                  <Volume1 className="w-4 h-4 text-amber-400" />
-                ) : (
-                  <Volume2 className="w-4 h-4 text-emerald-400" />
-                )}
-                <span>アラーム音量設定</span>
-              </label>
-              <span
-                className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                  volume === 0
-                    ? 'bg-red-950/90 text-red-300 border border-red-700/60'
-                    : volume <= 35
-                    ? 'bg-amber-950/90 text-amber-300 border border-amber-700/60'
-                    : 'bg-emerald-950/90 text-emerald-300 border border-emerald-700/60'
-                }`}
-              >
-                {volume === 0 ? '消音（バイブのみ）' : `${volume}%`}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <span className="text-[11px] text-gray-400 shrink-0 font-medium">0%</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={volume}
-                onChange={(e) => setVolume(parseInt(e.target.value, 10))}
-                className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg cursor-pointer"
-              />
-              <span className="text-[11px] text-gray-400 shrink-0 font-medium">100%</span>
-            </div>
-
-            {/* Quick preset buttons */}
-            <div className="grid grid-cols-4 gap-1.5 pt-0.5">
-              <button
-                type="button"
-                onClick={() => setVolume(0)}
-                className={`py-1 px-1 rounded-lg text-[11px] font-bold transition cursor-pointer border text-center ${
-                  volume === 0
-                    ? 'bg-red-800 text-white border-red-600 shadow-xs'
-                    : 'bg-[#1c2430] text-gray-400 hover:text-white border-gray-700'
-                }`}
-              >
-                🔇 消音
-              </button>
-              <button
-                type="button"
-                onClick={() => setVolume(30)}
-                className={`py-1 px-1 rounded-lg text-[11px] font-bold transition cursor-pointer border text-center ${
-                  volume === 30
-                    ? 'bg-amber-700 text-white border-amber-500 shadow-xs'
-                    : 'bg-[#1c2430] text-gray-400 hover:text-white border-gray-700'
-                }`}
-              >
-                🚌 30%
-              </button>
-              <button
-                type="button"
-                onClick={() => setVolume(70)}
-                className={`py-1 px-1 rounded-lg text-[11px] font-bold transition cursor-pointer border text-center ${
-                  volume === 70
-                    ? 'bg-emerald-700 text-white border-emerald-500 shadow-xs'
-                    : 'bg-[#1c2430] text-gray-400 hover:text-white border-gray-700'
-                }`}
-              >
-                🏠 70%
-              </button>
-              <button
-                type="button"
-                onClick={() => setVolume(100)}
-                className={`py-1 px-1 rounded-lg text-[11px] font-bold transition cursor-pointer border text-center ${
-                  volume === 100
-                    ? 'bg-blue-700 text-white border-blue-500 shadow-xs'
-                    : 'bg-[#1c2430] text-gray-400 hover:text-white border-gray-700'
-                }`}
-              >
-                🔊 100%
-              </button>
-            </div>
-            <p className="text-[10px] text-gray-400 pt-0.5">
-              ※電車やバス、街中では「消音」または「30%」が安心です。0%時はバイブレーションのみ作動します。
-            </p>
+          {/* Submit Button */}
+          <div className="pt-2">
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 active:scale-98 text-white font-bold text-sm shadow-xl flex items-center justify-center gap-2 transition cursor-pointer border border-blue-400/40 disabled:opacity-50"
+            >
+              <Check className="w-4 h-4 stroke-[3]" />
+              <span>{isSubmitting ? '保存中...' : targetItem ? '予定を更新して保存' : '予定を作成して保存'}</span>
+            </button>
           </div>
         </form>
-
-        <div className="px-4 py-3 bg-[#1a202c] border-t border-gray-700/80 shrink-0 shadow-lg">
-          <button
-            type="submit"
-            form="reminder-modal-form"
-            disabled={isSubmitting}
-            className="w-full py-3 px-4 rounded-xl bg-[#38a169] hover:bg-[#2f855a] active:scale-98 text-white font-bold text-base shadow-md transition cursor-pointer flex items-center justify-center gap-2"
-          >
-            <span>{isSubmitting ? '保存中...' : '保存する'}</span>
-          </button>
-        </div>
       </div>
     </div>
   );
