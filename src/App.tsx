@@ -15,6 +15,7 @@ import {
   getScheduleCategory,
   parseNoticesString,
   calculateNextOccurrence,
+  getNextFutureOccurrence,
 } from './utils/dateUtils';
 import { Plus, CheckCircle2, AlertTriangle, Trash2, Send, CheckSquare } from 'lucide-react';
 import {
@@ -68,13 +69,11 @@ export default function App() {
     onConfirm: () => {},
   });
 
-  // Notification toast message state
+  // Simple toast message state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage((curr) => (curr === msg ? null : curr));
-    }, 4500);
+    setTimeout(() => setToastMessage(null), 3000);
   };
 
   // Smartphone frame mockup toggle for desktop
@@ -82,7 +81,6 @@ export default function App() {
 
   // 1. Initial Load from LocalStorage & IndexedDB
   useEffect(() => {
-    // Load custom sounds from IndexedDB
     getAllCustomSounds().then((sounds) => {
       if (sounds && sounds.length > 0) {
         setCustomSounds(sounds);
@@ -94,7 +92,29 @@ export default function App() {
 
     if (savedReminders) {
       try {
-        const parsed = JSON.parse(savedReminders);
+        let parsed: ReminderItem[] = JSON.parse(savedReminders);
+        // Automatically roll forward any repeating reminders whose target_time has passed
+        let hasChanges = false;
+        parsed = parsed.map((item) => {
+          if (item.repeat && item.repeat !== 'なし') {
+            const t = parseDateTime(item.target_time);
+            if (t && t.getTime() <= Date.now()) {
+              const nextTime = getNextFutureOccurrence(item.target_time, item.repeat);
+              if (nextTime && nextTime !== item.target_time) {
+                hasChanges = true;
+                return { ...item, target_time: nextTime, snoozed_until: undefined };
+              }
+            }
+          }
+          return item;
+        });
+
+        if (hasChanges) {
+          try {
+            localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(parsed));
+          } catch {}
+        }
+
         setReminders(parsed);
         syncAllNativeReminders(parsed);
       } catch (e) {
@@ -110,8 +130,8 @@ export default function App() {
           memo: '水分補給とお茶の時間。少し背伸びをしてリフレッシュしましょう！',
           sound: '電子音（ピピッ）',
           duration: 10,
-          repeat: 'なし', // リピートなし（完了を押せばすっきりと完了タブに移動）
-          notices: '5分前', // 事前通知テスト用
+          repeat: 'なし',
+          notices: '5分前',
           snooze_min: 5,
           target_time: formatDateTime(inTenMin),
           volume: 70,
@@ -136,11 +156,46 @@ export default function App() {
     requestNotificationPermission();
   }, []);
 
+  // When app returns to foreground, check if any repeating alarms should roll forward
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setReminders((prev) => {
+          let hasChanges = false;
+          const updated = prev.map((item) => {
+            if (item.repeat && item.repeat !== 'なし') {
+              const t = parseDateTime(item.target_time);
+              if (t && t.getTime() <= Date.now()) {
+                const nextTime = getNextFutureOccurrence(item.target_time, item.repeat);
+                if (nextTime && nextTime !== item.target_time) {
+                  hasChanges = true;
+                  return { ...item, target_time: nextTime, snoozed_until: undefined };
+                }
+              }
+            }
+            return item;
+          });
+
+          if (hasChanges) {
+            try {
+              localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(updated));
+            } catch {}
+            syncAllNativeReminders(updated);
+            return updated;
+          }
+          return prev;
+        });
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
   // Save changes to localStorage & sync Android AlarmClock
   const updateRemindersState = (newReminders: ReminderItem[]) => {
     setReminders(newReminders);
     try {
-      // Strip huge base64 from localStorage to never exceed quota
       const sanitized = newReminders.map((r) => {
         if (r.custom_sound_url && r.custom_sound_url.length > 500) {
           return { ...r, custom_sound_url: undefined };
@@ -169,498 +224,486 @@ export default function App() {
     }
   };
 
-  // Google Calendar Push Action (100% Native Intent)
-  const handlePushToGoogleCalendar = async (item: ReminderItem) => {
-    setPushingReminderId(item.id);
-    try {
-      const success = await openAndroidCalendarEvent(item);
-      if (success) {
+  // Add or update custom sound
+  const handleAddCustomSounds = async (sounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
+    for (const s of sounds) {
+      await saveCustomSound(s.name, s.url, s.size, s.mimeType);
+    }
+    const freshSounds = await getAllCustomSounds();
+    setCustomSounds(freshSounds);
+    showToast(`🎵 音源「${sounds.map((s) => s.name).join(', ')}」を保存しました`);
+  };
+
+  // Delete custom sound
+  const handleDeleteCustomSound = async (name: string) => {
+    await deleteCustomSound(name);
+    const freshSounds = await getAllCustomSounds();
+    setCustomSounds(freshSounds);
+    showToast(`🗑 音源「${name}」を削除しました`);
+  };
+
+  // Timer check loop for browser/PWA fallback
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      const nowTs = now.getTime();
+
+      reminders.forEach((item) => {
+        const targetDate = parseDateTime(item.target_time);
+        if (!targetDate) return;
+
+        // Snooze check
+        if (item.snoozed_until) {
+          const snoozeDate = new Date(item.snoozed_until);
+          if (nowTs >= snoozeDate.getTime() && nowTs - snoozeDate.getTime() < 30000) {
+            triggerAlarm(item, false);
+            return;
+          }
+        }
+
+        // Advance notices check
+        if (item.notices && item.notices !== 'なし' && !item.snoozed_until) {
+          const parsed = parseNoticesString(item.notices);
+          parsed.forEach((n) => {
+            const noticeTs = targetDate.getTime() - n.sec * 1000;
+            if (Math.abs(nowTs - noticeTs) < 15000) {
+              const firedKey = `fired_notice_${item.id}_${n.label}`;
+              if (!sessionStorage.getItem(firedKey)) {
+                sessionStorage.setItem(firedKey, 'true');
+                triggerAlarm(item, true, n.label);
+              }
+            }
+          });
+        }
+
+        // Main scheduled alarm check
+        if (!item.snoozed_until) {
+          const diff = nowTs - targetDate.getTime();
+          if (diff >= 0 && diff < 30000) {
+            const firedKey = `fired_main_${item.id}_${item.target_time}`;
+            if (!sessionStorage.getItem(firedKey)) {
+              sessionStorage.setItem(firedKey, 'true');
+              triggerAlarm(item, false);
+            }
+          }
+        }
+      });
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [reminders]);
+
+  const triggerAlarm = (item: ReminderItem, isNotice: boolean, noticeLabel?: string) => {
+    if (activeAlarm && activeAlarm.reminder.id === item.id) return;
+
+    setActiveAlarm({
+      reminder: item,
+      isNotice,
+      noticeLabel,
+    });
+
+    const vol = (item as any).volume !== undefined ? (item as any).volume : 70;
+    playAlarmSound(item.sound, item.custom_sound_url, vol, item.duration || 15);
+
+    const titlePrefix = isNotice ? `📢【事前通知 ${noticeLabel}】` : '⏰【リマインダー】';
+    sendSystemNotification(`${titlePrefix} ${item.title}`, {
+      body: item.memo || item.target_time,
+      requireInteraction: true,
+    });
+  };
+
+  // Add or Edit Reminder
+  const handleSaveReminder = async (newItem: ReminderItem) => {
+    let updated: ReminderItem[];
+
+    if (isEditingFromCompleted) {
+      setCompleted((prev) => prev.filter((r) => r.id !== newItem.id));
+      updateCompletedState(completed.filter((r) => r.id !== newItem.id));
+      updated = [newItem, ...reminders];
+      setIsEditingFromCompleted(false);
+    } else {
+      const exists = reminders.some((r) => r.id === newItem.id);
+      if (exists) {
+        updated = reminders.map((r) => (r.id === newItem.id ? newItem : r));
+      } else {
+        updated = [newItem, ...reminders];
+      }
+    }
+
+    updateRemindersState(updated);
+    await scheduleNativeReminder(newItem);
+    setIsReminderModalOpen(false);
+    setEditingItem(null);
+    showToast('✅ 予定を保存しました');
+  };
+
+  // Delete Reminder
+  const handleDeleteReminder = (item: ReminderItem) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: '予定の削除',
+      message: `「${item.title}」を削除してもよろしいですか？`,
+      onConfirm: async () => {
+        const filtered = reminders.filter((r) => r.id !== item.id);
+        updateRemindersState(filtered);
+        await cancelNativeReminder(item);
+        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        showToast('🗑 予定を削除しました');
+      },
+    });
+  };
+
+  // Complete Reminder (Mark as completed)
+  const handleCompleteReminder = (item: ReminderItem) => {
+    if (item.repeat && item.repeat !== 'なし') {
+      const nextTime = calculateNextOccurrence(item.target_time, item.repeat);
+      if (nextTime) {
         const updated = reminders.map((r) =>
-          r.id === item.id ? { ...r, google_event_id: `gcal-${Date.now()}` } : r
+          r.id === item.id ? { ...r, target_time: nextTime, snoozed_until: undefined } : r
         );
         updateRemindersState(updated);
-        showToast(`📅 「${item.title}」をカレンダーへ送信しました`);
+        scheduleNativeReminder({ ...item, target_time: nextTime, snoozed_until: undefined });
+        showToast(`🎉 完了しました！次回予定（${nextTime}）に更新しました`);
+        return;
       }
-    } catch (err: any) {
-      console.error(err);
-      showToast('カレンダーの起動に失敗しました');
+    }
+
+    const remaining = reminders.filter((r) => r.id !== item.id);
+    const newCompleted = [{ ...item, completed_at: formatDateTime(new Date()) }, ...completed];
+
+    updateRemindersState(remaining);
+    updateCompletedState(newCompleted);
+    cancelNativeReminder(item);
+    showToast('🎉 予定を完了タブに移動しました');
+  };
+
+  // Delete Completed item
+  const handleDeleteCompleted = (item: ReminderItem) => {
+    const nextCompleted = completed.filter((c) => c.id !== item.id);
+    updateCompletedState(nextCompleted);
+    showToast('🗑 完了履歴から削除しました');
+  };
+
+  // Clear all completed
+  const handleClearAllCompleted = () => {
+    setConfirmDialog({
+      isOpen: true,
+      title: '完了済み予定の一括消去',
+      message: '完了タブのすべての予定を消去してもよろしいですか？',
+      onConfirm: () => {
+        updateCompletedState([]);
+        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        showToast('🧹 完了履歴をすべて削除しました');
+      },
+    });
+  };
+
+  // Calendar sync single item
+  const handleExportSingleToCalendar = async (item: ReminderItem) => {
+    setPushingReminderId(item.id);
+    try {
+      await openAndroidCalendarEvent({
+        title: item.title,
+        memo: item.memo,
+        target_time: item.target_time,
+      });
+      showToast('📅 Googleカレンダーに予定を送信しました');
+    } catch (e) {
+      showToast('⚠️ カレンダー送信に失敗しました');
     } finally {
       setPushingReminderId(null);
     }
   };
 
-  const handleUnlinkCalendar = (item: ReminderItem) => {
-    const updated = reminders.map((r) =>
-      r.id === item.id ? { ...r, google_event_id: null } : r
-    );
-    updateRemindersState(updated);
-    showToast('カレンダー登録フラグを解除しました');
-  };
-
-  // Batch Export to Calendar
+  // Batch Calendar Export
   const handleBatchExportToCalendar = async () => {
-    const selectedItems = reminders.filter((r) => selectedReminderIds.has(r.id));
-    if (selectedItems.length === 0) return;
+    const selectedList = reminders.filter((r) => selectedReminderIds.has(r.id));
+    if (selectedList.length === 0) {
+      showToast('送信する予定を選択してください');
+      return;
+    }
 
     setIsBatchExporting(true);
-    let count = 0;
-    for (const item of selectedItems) {
-      try {
-        await openAndroidCalendarEvent(item);
-        count++;
-      } catch (err) {
-        console.error(err);
-      }
+    for (const item of selectedList) {
+      await openAndroidCalendarEvent({
+        title: item.title,
+        memo: item.memo,
+        target_time: item.target_time,
+      });
     }
-    const updated = reminders.map((r) =>
-      selectedReminderIds.has(r.id) ? { ...r, google_event_id: `gcal-${Date.now()}` } : r
-    );
-    updateRemindersState(updated);
     setIsBatchExporting(false);
     setIsSelectionMode(false);
     setSelectedReminderIds(new Set());
-    showToast(`📅 ${count}件の予定をGoogleカレンダーに送信しました！`);
+    showToast(`📅 ${selectedList.length}件の予定をカレンダーに送信しました`);
   };
 
-  const toggleSelectReminder = (item: ReminderItem) => {
-    setSelectedReminderIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(item.id)) {
-        next.delete(item.id);
-      } else {
-        next.add(item.id);
-      }
-      return next;
-    });
-  };
-
-  const toggleSelectAll = () => {
-    if (selectedReminderIds.size === reminders.length) {
-      setSelectedReminderIds(new Set());
-    } else {
-      setSelectedReminderIds(new Set(reminders.map((r) => r.id)));
-    }
-  };
-
-  // Add/Save Reminder
-  const handleSaveReminder = async (item: ReminderItem) => {
-    let updated: ReminderItem[];
-    if (isEditingFromCompleted) {
-      const remainingCompleted = completed.filter((c) => c.id !== item.id);
-      updateCompletedState(remainingCompleted);
-      updated = [item, ...reminders.filter((r) => r.id !== item.id)];
-      setIsEditingFromCompleted(false);
-    } else {
-      const existsIndex = reminders.findIndex((r) => r.id === item.id);
-      if (existsIndex >= 0) {
-        updated = [...reminders];
-        updated[existsIndex] = item;
-      } else {
-        updated = [item, ...reminders];
-      }
-    }
-
-    updated.sort((a, b) => a.target_time.localeCompare(b.target_time));
-    updateRemindersState(updated);
-    await scheduleNativeReminder(item);
-    showToast(`✅ 「${item.title}」を保存しました`);
-  };
-
-  // Complete Reminder
-  const handleCompleteReminder = (item: ReminderItem) => {
-    cancelNativeReminder(item.id);
-    const nowStr = formatDateTime(new Date());
-
-    if (item.repeat && item.repeat !== 'なし') {
-      const nextTime = calculateNextOccurrence(item.target_time, item.repeat);
-      if (nextTime) {
-        const completedRecord: ReminderItem = {
-          ...item,
-          id: `comp-${Date.now()}-${item.id}`,
-          completed_time: nowStr,
-        };
-        updateCompletedState([completedRecord, ...completed]);
-
-        const nextReminder: ReminderItem = {
-          ...item,
-          target_time: nextTime,
-          snoozed_until: null,
-          google_event_id: null,
-        };
-        const remaining = reminders.map((r) => (r.id === item.id ? nextReminder : r));
-        remaining.sort((a, b) => a.target_time.localeCompare(b.target_time));
-        updateRemindersState(remaining);
-        showToast(`🎉 完了！次回予定: ${nextTime}（${item.repeat}）`);
-        return;
-      }
-    }
-
-    const updatedReminders = reminders.filter((r) => r.id !== item.id);
-    const completedItem: ReminderItem = {
-      ...item,
-      completed_time: nowStr,
-    };
-    updateRemindersState(updatedReminders);
-    updateCompletedState([completedItem, ...completed]);
-    showToast(`🎉 「${item.title}」を完了にしました`);
-  };
-
-  // Restore completed reminder back to schedule
-  const handleRestoreReminder = (item: ReminderItem) => {
-    const updatedCompleted = completed.filter((c) => c.id !== item.id);
-    const restoredItem: ReminderItem = {
-      ...item,
-      completed_time: undefined,
-      snoozed_until: null,
-    };
-    const updatedReminders = [...reminders, restoredItem];
-    updatedReminders.sort((a, b) => a.target_time.localeCompare(b.target_time));
-
-    updateCompletedState(updatedCompleted);
-    updateRemindersState(updatedReminders);
-    scheduleNativeReminder(restoredItem);
-    showToast(`↩️ 「${item.title}」を予定表に戻しました`);
-  };
-
-  // Delete completed
-  const handleDeleteCompleted = (item: ReminderItem) => {
-    setConfirmDialog({
-      isOpen: true,
-      title: '完了履歴の削除',
-      message: `「${item.title}」の履歴を完全に削除しますか？`,
-      onConfirm: () => {
-        const next = completed.filter((c) => c.id !== item.id);
-        updateCompletedState(next);
-        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
-        showToast('完了履歴を削除しました');
-      },
-    });
-  };
-
-  const handleClearAllCompleted = () => {
-    if (completed.length === 0) return;
-    setConfirmDialog({
-      isOpen: true,
-      title: '完了履歴の一括削除',
-      message: `完了済みの全 ${completed.length} 件の履歴をすべて削除しますか？`,
-      onConfirm: () => {
-        updateCompletedState([]);
-        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
-        showToast('すべての完了履歴を削除しました');
-      },
-    });
-  };
-
-  // Audio additions preserved in IndexedDB
-  const handleAddCustomSounds = async (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
-    for (const ns of newSounds) {
-      await saveCustomSound({
-        id: `sound-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        name: ns.name,
-        url: ns.url,
-        mimeType: ns.mimeType || 'audio/mpeg',
-        size: ns.size || ns.url.length,
-        createdAt: Date.now(),
-      }).catch((e) => console.warn('Failed to save to IndexedDB:', e));
-    }
-    const all = await getAllCustomSounds();
-    setCustomSounds(all);
-    showToast(`🎵 音源「${newSounds[0]?.name}」を保存しました`);
-  };
-
-  const handleDeleteCustomSound = async (name: string) => {
-    await deleteCustomSound(name);
-    const all = await getAllCustomSounds();
-    setCustomSounds(all);
-    showToast(`音源「${name}」を削除しました`);
-  };
-
-  // Categorize schedule items
-  const categorizedReminders = useMemo(() => {
-    const past: ReminderItem[] = [];
+  // Group active reminders by today / future / past
+  const groupedReminders = useMemo(() => {
     const today: ReminderItem[] = [];
     const future: ReminderItem[] = [];
+    const past: ReminderItem[] = [];
 
-    reminders.forEach((r) => {
-      const cat = getScheduleCategory(r.target_time);
-      if (cat === 'past') past.push(r);
-      else if (cat === 'today') today.push(r);
-      else future.push(r);
+    const sorted = [...reminders].sort((a, b) => {
+      const da = parseDateTime(a.target_time)?.getTime() || 0;
+      const db = parseDateTime(b.target_time)?.getTime() || 0;
+      return da - db;
     });
 
-    return { past, today, future };
+    sorted.forEach((item) => {
+      const cat = getScheduleCategory(item.target_time);
+      if (cat === 'today') today.push(item);
+      else if (cat === 'future') future.push(item);
+      else past.push(item);
+    });
+
+    return { today, future, past };
   }, [reminders]);
 
   return (
-    <div className="min-h-screen bg-[#1a202c] text-white flex flex-col items-center">
-      {/* Main Container - Mobile Responsive */}
-      <div className={`w-full ${isFramed ? 'max-w-[430px]' : 'max-w-2xl'} min-h-screen flex flex-col bg-[#242e3d] shadow-2xl relative border-x border-gray-700/60`}>
+    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div className="fixed top-4 z-50 bg-emerald-600 text-white font-medium px-4 py-2 rounded-full shadow-lg text-sm animate-bounce">
+          {toastMessage}
+        </div>
+      )}
+
+      {/* Main Container */}
+      <div className={`w-full ${isFramed ? 'max-w-md' : 'max-w-xl'} flex-1 flex flex-col bg-slate-950 min-h-screen shadow-2xl relative border-x border-slate-800`}>
         {/* Header */}
         <Header
-          onOpenPhoneModal={() => setIsPhoneModalOpen(true)}
-          isFramed={isFramed}
-          onToggleFrame={() => setIsFramed(!isFramed)}
+          currentTab={currentTab}
+          onTabChange={setCurrentTab}
+          scheduleCount={reminders.length}
+          completedCount={completed.length}
+          onOpenPhoneShare={() => setIsPhoneModalOpen(true)}
         />
 
-        {/* Navigation Tabs */}
-        <div className="flex border-b border-gray-700/80 bg-[#1c2430] sticky top-0 z-30 shadow-xs">
-          <button
-            type="button"
-            onClick={() => {
-              setCurrentTab('schedule');
-              setIsSelectionMode(false);
-            }}
-            className={`flex-1 py-3 text-center font-bold text-sm transition cursor-pointer border-b-2 flex items-center justify-center gap-2 ${
-              currentTab === 'schedule'
-                ? 'border-blue-500 text-blue-400 bg-blue-950/20'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <span>📅 予定表</span>
-            <span className="px-2 py-0.5 rounded-full text-xs bg-blue-900/80 text-blue-200 border border-blue-600/40 font-mono">
-              {reminders.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setCurrentTab('completed');
-              setIsSelectionMode(false);
-            }}
-            className={`flex-1 py-3 text-center font-bold text-sm transition cursor-pointer border-b-2 flex items-center justify-center gap-2 ${
-              currentTab === 'completed'
-                ? 'border-emerald-500 text-emerald-400 bg-emerald-950/20'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <span>🎉 完了</span>
-            <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-900/80 text-emerald-200 border border-emerald-600/40 font-mono">
-              {completed.length}
-            </span>
-          </button>
-        </div>
-
-        {/* Selection Toolbar (for sending to Google Calendar) */}
-        {currentTab === 'schedule' && reminders.length > 0 && (
-          <div className="bg-[#1f2937] px-3.5 py-2 border-b border-gray-700/70 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
+        {/* Action Toolbar */}
+        <div className="px-4 py-3 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2">
+          {currentTab === 'schedule' ? (
+            <>
               <button
-                type="button"
                 onClick={() => {
-                  setIsSelectionMode(!isSelectionMode);
-                  if (isSelectionMode) setSelectedReminderIds(new Set());
+                  if (isSelectionMode) {
+                    setIsSelectionMode(false);
+                    setSelectedReminderIds(new Set());
+                  } else {
+                    setIsSelectionMode(true);
+                  }
                 }}
-                className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 border ${
+                className={`text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors flex items-center gap-1.5 ${
                   isSelectionMode
-                    ? 'bg-blue-600 text-white border-blue-400'
-                    : 'bg-[#2d3748] hover:bg-gray-700 text-gray-300 border-gray-600'
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                    : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
                 }`}
               >
                 <CheckSquare className="w-3.5 h-3.5" />
-                <span>{isSelectionMode ? '選択終了' : '選択して一括送信'}</span>
+                {isSelectionMode ? '選択解除' : 'カレンダー選択送信'}
               </button>
 
-              {isSelectionMode && (
+              {isSelectionMode && selectedReminderIds.size > 0 && (
                 <button
-                  type="button"
-                  onClick={toggleSelectAll}
-                  className="px-2 py-1 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold transition cursor-pointer text-[11px]"
+                  onClick={handleBatchExportToCalendar}
+                  disabled={isBatchExporting}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium flex items-center gap-1 shadow"
                 >
-                  {selectedReminderIds.size === reminders.length ? '全解除' : '全選択'}
+                  <Send className="w-3.5 h-3.5" />
+                  {isBatchExporting ? '送信中...' : `送信 (${selectedReminderIds.size})`}
                 </button>
               )}
-            </div>
-
-            {isSelectionMode && selectedReminderIds.size > 0 && (
-              <button
-                type="button"
-                onClick={handleBatchExportToCalendar}
-                disabled={isBatchExporting}
-                className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition cursor-pointer flex items-center gap-1 shadow-sm disabled:opacity-50"
-              >
-                <Send className="w-3 h-3" />
-                <span>{isBatchExporting ? '送信中...' : `${selectedReminderIds.size}件をカレンダーに送信`}</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Tab 1: Schedules List */}
-        {currentTab === 'schedule' && (
-          <div className="flex-1 p-3.5 space-y-4 pb-24">
-            {reminders.length === 0 ? (
-              <div className="text-center py-16 text-gray-400 space-y-3">
-                <span className="text-5xl block animate-bounce">🔔</span>
-                <p className="font-bold text-base text-gray-300">登録されたリマインダーはありません</p>
-                <p className="text-xs text-gray-500 max-w-xs mx-auto">
-                  下の「予定を追加する」ボタンから、アラーム予定を作成できます。
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* Past Reminders */}
-                {categorizedReminders.past.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-red-400 uppercase tracking-wider px-1">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>予定時刻を過ぎています ({categorizedReminders.past.length})</span>
-                    </div>
-                    <div className="space-y-2">
-                      {categorizedReminders.past.map((item) => (
-                        <ReminderCard
-                          key={item.id}
-                          reminder={item}
-                          category="past"
-                          onEdit={(r) => {
-                            setEditingItem(r);
-                            setIsEditingFromCompleted(false);
-                            setIsReminderModalOpen(true);
-                          }}
-                          onComplete={handleCompleteReminder}
-                          onPushToCalendar={handlePushToGoogleCalendar}
-                          onUnlinkCalendar={handleUnlinkCalendar}
-                          isPushingCalendar={pushingReminderId === item.id}
-                          isSelectionMode={isSelectionMode}
-                          isSelected={selectedReminderIds.has(item.id)}
-                          onToggleSelect={toggleSelectReminder}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Today Reminders */}
-                {categorizedReminders.today.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400 uppercase tracking-wider px-1">
-                      <span>⏰ 本日の予定 ({categorizedReminders.today.length})</span>
-                    </div>
-                    <div className="space-y-2">
-                      {categorizedReminders.today.map((item) => (
-                        <ReminderCard
-                          key={item.id}
-                          reminder={item}
-                          category="today"
-                          onEdit={(r) => {
-                            setEditingItem(r);
-                            setIsEditingFromCompleted(false);
-                            setIsReminderModalOpen(true);
-                          }}
-                          onComplete={handleCompleteReminder}
-                          onPushToCalendar={handlePushToGoogleCalendar}
-                          onUnlinkCalendar={handleUnlinkCalendar}
-                          isPushingCalendar={pushingReminderId === item.id}
-                          isSelectionMode={isSelectionMode}
-                          isSelected={selectedReminderIds.has(item.id)}
-                          onToggleSelect={toggleSelectReminder}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Future Reminders */}
-                {categorizedReminders.future.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-sky-400 uppercase tracking-wider px-1">
-                      <span>📅 明日以降の予定 ({categorizedReminders.future.length})</span>
-                    </div>
-                    <div className="space-y-2">
-                      {categorizedReminders.future.map((item) => (
-                        <ReminderCard
-                          key={item.id}
-                          reminder={item}
-                          category="future"
-                          onEdit={(r) => {
-                            setEditingItem(r);
-                            setIsEditingFromCompleted(false);
-                            setIsReminderModalOpen(true);
-                          }}
-                          onComplete={handleCompleteReminder}
-                          onPushToCalendar={handlePushToGoogleCalendar}
-                          onUnlinkCalendar={handleUnlinkCalendar}
-                          isPushingCalendar={pushingReminderId === item.id}
-                          isSelectionMode={isSelectionMode}
-                          isSelected={selectedReminderIds.has(item.id)}
-                          onToggleSelect={toggleSelectReminder}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Tab 2: Completed List */}
-        {currentTab === 'completed' && (
-          <div className="flex-1 p-3.5 space-y-3 pb-24">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-xs font-bold text-gray-400">完了履歴 ({completed.length}件)</span>
+            </>
+          ) : (
+            <div className="flex items-center justify-between w-full">
+              <span className="text-xs text-slate-400 font-medium">完了済みの予定履歴</span>
               {completed.length > 0 && (
                 <button
-                  type="button"
                   onClick={handleClearAllCompleted}
-                  className="text-xs text-red-400 hover:text-red-300 font-bold flex items-center gap-1 transition cursor-pointer"
+                  className="text-xs px-2.5 py-1 text-rose-400 hover:text-rose-300 hover:bg-rose-950/30 rounded border border-rose-900/50 flex items-center gap-1"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>全履歴を削除</span>
+                  <Trash2 className="w-3 h-3" />
+                  すべて消去
                 </button>
               )}
             </div>
+          )}
+        </div>
 
-            {completed.length === 0 ? (
-              <div className="text-center py-16 text-gray-400 space-y-2">
-                <CheckCircle2 className="w-12 h-12 mx-auto text-gray-600 stroke-[1.5]" />
-                <p className="font-bold text-base text-gray-300">完了したリマインダーはありません</p>
-                <p className="text-xs text-gray-500">
-                  予定を達成して「完了」ボタンを押すと、ここに履歴が保存されます。
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {completed.map((item) => (
-                  <CompletedCard
-                    key={item.id}
-                    item={item}
-                    onRestore={handleRestoreReminder}
-                    onDelete={handleDeleteCompleted}
-                    onEdit={(r) => {
-                      setEditingItem(r);
-                      setIsEditingFromCompleted(true);
-                      setIsReminderModalOpen(true);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+        {/* Content Body */}
+        <div className="flex-1 p-4 overflow-y-auto pb-28">
+          {currentTab === 'schedule' ? (
+            <div>
+              {reminders.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <div className="w-16 h-16 rounded-full bg-slate-800/80 flex items-center justify-center text-slate-500 mb-3">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-300">予定はありません</h3>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xs">
+                    下の「+ 予定を追加する」ボタンから新しいリマインダーを作成できます。
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Today Reminders */}
+                  {groupedReminders.today.length > 0 && (
+                    <section>
+                      <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        今日の予定 ({groupedReminders.today.length})
+                      </h3>
+                      <div className="space-y-2.5">
+                        {groupedReminders.today.map((item) => (
+                          <ReminderCard
+                            key={item.id}
+                            item={item}
+                            isSelectionMode={isSelectionMode}
+                            isSelected={selectedReminderIds.has(item.id)}
+                            onToggleSelect={() => {
+                              setSelectedReminderIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(item.id)) next.delete(item.id);
+                                else next.add(item.id);
+                                return next;
+                              });
+                            }}
+                            onEdit={() => {
+                              setEditingItem(item);
+                              setIsEditingFromCompleted(false);
+                              setIsReminderModalOpen(true);
+                            }}
+                            onDelete={() => handleDeleteReminder(item)}
+                            onComplete={() => handleCompleteReminder(item)}
+                            onExportToCalendar={() => handleExportSingleToCalendar(item)}
+                            isPushing={pushingReminderId === item.id}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
 
-        {/* Floating Action Button (Add Reminder) */}
-        {currentTab === 'schedule' && !isSelectionMode && (
-          <div className="fixed bottom-6 z-40 max-w-[430px] w-full px-4 pointer-events-none flex justify-center">
+                  {/* Future Reminders */}
+                  {groupedReminders.future.length > 0 && (
+                    <section>
+                      <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-sky-400"></span>
+                        これからの予定 ({groupedReminders.future.length})
+                      </h3>
+                      <div className="space-y-2.5">
+                        {groupedReminders.future.map((item) => (
+                          <ReminderCard
+                            key={item.id}
+                            item={item}
+                            isSelectionMode={isSelectionMode}
+                            isSelected={selectedReminderIds.has(item.id)}
+                            onToggleSelect={() => {
+                              setSelectedReminderIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(item.id)) next.delete(item.id);
+                                else next.add(item.id);
+                                return next;
+                              });
+                            }}
+                            onEdit={() => {
+                              setEditingItem(item);
+                              setIsEditingFromCompleted(false);
+                              setIsReminderModalOpen(true);
+                            }}
+                            onDelete={() => handleDeleteReminder(item)}
+                            onComplete={() => handleCompleteReminder(item)}
+                            onExportToCalendar={() => handleExportSingleToCalendar(item)}
+                            isPushing={pushingReminderId === item.id}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Past Reminders */}
+                  {groupedReminders.past.length > 0 && (
+                    <section>
+                      <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                        過去・期限切れの予定 ({groupedReminders.past.length})
+                      </h3>
+                      <div className="space-y-2.5">
+                        {groupedReminders.past.map((item) => (
+                          <ReminderCard
+                            key={item.id}
+                            item={item}
+                            isSelectionMode={isSelectionMode}
+                            isSelected={selectedReminderIds.has(item.id)}
+                            onToggleSelect={() => {
+                              setSelectedReminderIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(item.id)) next.delete(item.id);
+                                else next.add(item.id);
+                                return next;
+                              });
+                            }}
+                            onEdit={() => {
+                              setEditingItem(item);
+                              setIsEditingFromCompleted(false);
+                              setIsReminderModalOpen(true);
+                            }}
+                            onDelete={() => handleDeleteReminder(item)}
+                            onComplete={() => handleCompleteReminder(item)}
+                            onExportToCalendar={() => handleExportSingleToCalendar(item)}
+                            isPushing={pushingReminderId === item.id}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              {completed.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <div className="w-16 h-16 rounded-full bg-slate-800/80 flex items-center justify-center text-slate-500 mb-3">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-300">完了した予定はありません</h3>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xs">
+                    完了した予定はここに保存され、いつでも再編集・再登録できます。
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {completed.map((item) => (
+                    <CompletedCard
+                      key={item.id}
+                      item={item}
+                      onEdit={() => {
+                        setEditingItem(item);
+                        setIsEditingFromCompleted(true);
+                        setIsReminderModalOpen(true);
+                      }}
+                      onDelete={() => handleDeleteCompleted(item)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Floating Add Reminder Button (Bottom Bar) */}
+        {currentTab === 'schedule' && (
+          <div className="absolute bottom-4 left-0 right-0 px-4 flex justify-center pointer-events-none">
             <button
-              type="button"
               onClick={() => {
                 setEditingItem(null);
                 setIsEditingFromCompleted(false);
                 setIsReminderModalOpen(true);
               }}
-              className="pointer-events-auto w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-600 hover:from-blue-500 hover:to-sky-500 active:scale-98 text-white font-bold text-base shadow-xl flex items-center justify-center gap-2 transition cursor-pointer border border-blue-400/40"
+              className="pointer-events-auto bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold px-6 py-3.5 rounded-full shadow-xl flex items-center gap-2 transform active:scale-95 transition-all"
             >
-              <Plus className="w-5 h-5 stroke-[3]" />
-              <span>予定を追加する</span>
+              <Plus className="w-5 h-5 stroke-[2.5]" />
+              予定を追加する
             </button>
-          </div>
-        )}
-
-        {/* Toast Message */}
-        {toastMessage && (
-          <div className="fixed bottom-20 z-50 max-w-[400px] w-[90%] left-1/2 -translate-x-1/2 bg-gray-900/95 text-white border border-gray-600 px-4 py-3 rounded-2xl shadow-2xl text-xs font-bold text-center animate-in fade-in slide-in-from-bottom-2">
-            {toastMessage}
           </div>
         )}
       </div>
@@ -729,3 +772,5 @@ export default function App() {
     </div>
   );
 }
+
+export { App };
