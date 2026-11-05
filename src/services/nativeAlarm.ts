@@ -15,6 +15,7 @@ interface NativeAlarmPluginInterface {
     audioBase64?: string;
     duration?: number;
     volume?: number;
+    repeat?: string;
   }): Promise<{ success: boolean; audioPath?: string }>;
 
   cancelAlarm(options: { id: string }): Promise<{ success: boolean }>;
@@ -176,6 +177,7 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
       audioBase64: item.custom_sound_url,
       duration,
       volume,
+      repeat: item.repeat || 'なし',
     });
     console.log(`[NativeAlarm] Scheduled exact AlarmClock for "${item.title}" at ${mainTimestamp}`);
   } catch (err) {
