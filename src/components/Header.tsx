@@ -1,11 +1,12 @@
 import React from 'react';
-import { Smartphone, RefreshCw, BookOpen } from 'lucide-react';
+import { Smartphone, BookOpen } from 'lucide-react';
 
 interface HeaderProps {
   onOpenPhoneModal: () => void;
   onOpenApkModal?: () => void;
   isFramed?: boolean;
   onToggleFrame?: () => void;
+  // Backward compatibility optional props
   user?: any;
   hasCalendarToken?: boolean;
   hasToken?: boolean;
@@ -41,40 +42,17 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         </div>
 
-        {/* Action Buttons: 最新化 + 説明書 */}
+        {/* Action Buttons: 説明書 */}
         <div className="flex items-center gap-2">
-          {/* Force App Update / Cache clear button */}
-          <button
-            type="button"
-            onClick={async () => {
-              const confirmed = window.confirm(
-                'アプリを最新版に更新（再読み込み）しますか？\n（古いキャッシュを消去します。登録した予定は消えません）'
-              );
-              if (confirmed) {
-                const win = window as unknown as { forceUpdateApp?: () => Promise<void> };
-                if (win.forceUpdateApp) {
-                  await win.forceUpdateApp();
-                } else {
-                  window.location.reload();
-                }
-              }
-            }}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-bold transition cursor-pointer bg-gray-800 border border-gray-700 text-sky-300 hover:bg-gray-700 hover:text-sky-200"
-            title="アプリを最新版に更新"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
-            <span>最新化</span>
-          </button>
-
           {/* User Guide modal */}
           {handleOpenHelp && (
             <button
               type="button"
               onClick={handleOpenHelp}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold transition cursor-pointer bg-emerald-950/80 border border-emerald-600/70 text-emerald-300 hover:bg-emerald-900/80 shadow-xs"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition cursor-pointer bg-emerald-950/80 border border-emerald-600/70 text-emerald-300 hover:bg-emerald-900/80 shadow-xs active:scale-95"
               title="使い方説明書・Android設定"
             >
-              <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
+              <BookOpen className="w-4 h-4 text-emerald-400" />
               <span>説明書</span>
             </button>
           )}
