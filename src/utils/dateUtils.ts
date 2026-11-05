@@ -116,6 +116,29 @@ export function calculateNextOccurrence(targetTimeStr: string, repeat: string): 
 }
 
 /**
+ * Returns the next future date string for repeating items, rolling forward past occurrences
+ */
+export function getNextFutureOccurrence(targetTimeStr: string, repeat: string): string | null {
+  if (!repeat || repeat === 'なし') return null;
+  let nextStr = targetTimeStr;
+  const now = Date.now();
+  let loopCount = 0;
+
+  while (loopCount < 1000) {
+    const cand = calculateNextOccurrence(nextStr, repeat);
+    if (!cand) return null;
+    const candDate = parseDateTime(cand);
+    if (!candDate) return null;
+    nextStr = cand;
+    if (candDate.getTime() > now) {
+      return nextStr;
+    }
+    loopCount++;
+  }
+  return nextStr;
+}
+
+/**
  * Japanese day of week label
  */
 export function getJapaneseDayOfWeek(targetTimeStr: string): string {
