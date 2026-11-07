@@ -1,6 +1,6 @@
 import React from 'react';
 import { TriggeredAlarm } from '../types/reminder';
-import { Bell, Clock, FileText, Check, Square } from 'lucide-react';
+import { CheckCircle2, Clock, Check } from 'lucide-react';
 
 interface AlarmModalProps {
   alarm: TriggeredAlarm | null;
@@ -20,95 +20,72 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   const { reminder, isPreNotice, preLabel } = alarm;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-sm sm:max-w-md bg-[#252f3e] border-2 border-red-500/90 rounded-3xl shadow-2xl overflow-hidden text-white animate-in zoom-in-95 duration-150">
-        {/* Animated header banner */}
-        <div
-          className={`py-4 px-5 text-center flex items-center justify-center gap-2 border-b ${
-            isPreNotice
-              ? 'bg-sky-950/90 border-sky-600/70 text-sky-300'
-              : 'bg-red-950/90 border-red-600/70 text-red-300 animate-pulse'
-          }`}
-        >
-          <Bell className="w-6 h-6 animate-bounce text-red-400" />
-          <h2 className="text-lg sm:text-xl font-extrabold tracking-wide">
-            {isPreNotice ? `📢 【事前通知】 (${preLabel})` : '⏰ 時間になりました！'}
-          </h2>
+    <div className="fixed inset-0 z-50 w-screen h-screen min-h-screen bg-gradient-to-b from-[#606bf0] via-[#5b63ea] to-[#515ae0] text-white flex flex-col justify-between items-center px-6 py-12 sm:py-16 overflow-y-auto select-none animate-in fade-in duration-200">
+      {/* Top Branding Section matching Reminder FLEX */}
+      <div className="flex flex-col items-center justify-center pt-2 sm:pt-6">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white mb-2 drop-shadow-sm">
+          Reminder FLEX
+        </h1>
+        <div className="w-10 h-10 rounded-full border-2 border-white/90 flex items-center justify-center shadow-md">
+          <CheckCircle2 className="w-8 h-8 text-white stroke-[2.5]" />
         </div>
+        {isPreNotice && (
+          <span className="mt-3 px-3 py-1 rounded-full bg-white/20 text-white text-xs font-bold tracking-wide backdrop-blur-xs">
+            📢 事前通知 ({preLabel})
+          </span>
+        )}
+      </div>
 
-        {/* Alarm Information Body */}
-        <div className="p-5 sm:p-6 space-y-4">
-          {/* Title - Extra Large font for instant readability */}
-          <div className="bg-[#354356] p-4 sm:p-5 rounded-2xl border border-gray-600 shadow-inner">
-            <span className="text-xs font-bold text-gray-400 block mb-1">【予定】</span>
-            <h3 className="text-xl sm:text-2xl font-black text-white leading-snug break-words">
-              {reminder.title}
-            </h3>
+      {/* Center Reminder Title Section */}
+      <div className="my-auto w-full max-w-lg text-center px-4 py-8 flex flex-col items-center justify-center">
+        <h2 className="text-3xl sm:text-4xl md:text-5xl font-black text-white tracking-wide leading-tight break-words drop-shadow-md">
+          {reminder.title}
+        </h2>
 
-            {reminder.memo && (
-              <div className="mt-3 pt-3 border-t border-gray-600/60">
-                <span className="text-xs font-bold text-gray-400 block mb-1">【メモ】</span>
-                <p className="text-sm text-gray-200 whitespace-pre-line leading-relaxed break-words">
-                  {reminder.memo}
-                </p>
-              </div>
-            )}
-          </div>
+        {/* Memo (if available) */}
+        {reminder.memo && (
+          <p className="mt-4 text-base sm:text-lg text-white/90 font-medium whitespace-pre-line leading-relaxed max-w-md bg-white/10 px-4 py-2.5 rounded-2xl backdrop-blur-xs">
+            {reminder.memo}
+          </p>
+        )}
 
-          {/* Time & Snooze Info */}
-          <div className="flex items-center justify-between text-xs text-gray-300 px-3 py-2.5 bg-black/25 rounded-xl border border-gray-700/60">
-            <div>
-              <span className="text-gray-400 block text-[11px]">【予定時刻】</span>
-              <strong className="text-amber-300 text-sm font-bold">{reminder.target_time}</strong>
-            </div>
-            <div className="text-right">
-              <span className="text-gray-400 block text-[11px]">【スヌーズ設定】</span>
-              <strong className="text-purple-300 text-sm font-bold">{reminder.snooze_min || 5}分</strong>
-            </div>
-          </div>
+        {/* Target Time Info */}
+        <div className="mt-4 flex items-center gap-1.5 text-xs sm:text-sm text-white/80 font-medium">
+          <Clock className="w-4 h-4 text-white/90" />
+          <span>予定時刻: {reminder.target_time}</span>
+        </div>
+      </div>
 
-          {/* Action Buttons: Prominent Giant STOP Button First! */}
-          <div className="pt-2 space-y-3">
-            {/* Giant Prominent STOP Button */}
+      {/* Bottom Action Section: Prominent STOP Button */}
+      <div className="w-full max-w-xs flex flex-col items-center gap-4 pb-4 sm:pb-8">
+        <button
+          type="button"
+          onClick={onStop}
+          className="w-44 sm:w-48 py-4 sm:py-5 px-6 rounded-2xl bg-[#6100ed] hover:bg-[#5200c7] active:scale-95 text-white font-extrabold text-2xl sm:text-3xl shadow-2xl shadow-indigo-950/50 transition-all cursor-pointer flex items-center justify-center tracking-widest border border-white/20"
+        >
+          停止
+        </button>
+
+        {/* Auxiliary actions: Snooze & Complete */}
+        <div className="w-full flex items-center justify-center gap-2 pt-2">
+          <button
+            type="button"
+            onClick={() => onSnooze(alarm)}
+            className="flex-1 py-2.5 px-3 rounded-xl bg-white/15 hover:bg-white/25 active:scale-95 text-white font-bold text-xs sm:text-sm backdrop-blur-xs transition cursor-pointer flex items-center justify-center gap-1.5 border border-white/20"
+          >
+            <span>💤 スヌーズ ({reminder.snooze_min || 5}分)</span>
+          </button>
+
+          {!isPreNotice && (
             <button
               type="button"
-              onClick={onStop}
-              className="w-full py-4 sm:py-5 px-6 rounded-2xl bg-gradient-to-r from-red-600 via-rose-600 to-red-600 hover:from-red-500 hover:to-rose-500 active:scale-[0.98] text-white font-black shadow-2xl shadow-red-950 border-2 border-red-300/80 flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ring-4 ring-red-500/40 animate-pulse"
+              onClick={() => onCompleteDirectly(alarm)}
+              className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 active:scale-95 text-white font-bold text-xs sm:text-sm backdrop-blur-xs transition cursor-pointer flex items-center justify-center gap-1 border border-white/20 shadow-sm"
             >
-              <div className="flex items-center gap-2.5">
-                <Square className="w-7 h-7 sm:w-8 sm:h-8 fill-white text-white shrink-0" />
-                <span className="text-2xl sm:text-3xl font-black tracking-wider drop-shadow-md">
-                  STOP 停止
-                </span>
-              </div>
-              <span className="text-xs font-bold text-red-100 opacity-95">
-                ここをタップして音とバイブを止める
-              </span>
+              <Check className="w-4 h-4 stroke-[3]" />
+              <span>予定を完了</span>
             </button>
-
-            {/* Sub actions: スヌーズ & 完了 */}
-            <div className={`grid ${isPreNotice ? 'grid-cols-1' : 'grid-cols-2'} gap-2.5 pt-1`}>
-              <button
-                type="button"
-                onClick={() => onSnooze(alarm)}
-                className="py-3 px-3 rounded-xl bg-slate-700 hover:bg-slate-600 active:scale-95 text-slate-100 font-bold text-xs sm:text-sm border border-slate-500 shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <span>💤 スヌーズ</span>
-                <span className="text-[11px] text-purple-300 font-mono">({reminder.snooze_min || 5}分)</span>
-              </button>
-
-              {!isPreNotice && (
-                <button
-                  type="button"
-                  onClick={() => onCompleteDirectly(alarm)}
-                  className="py-3 px-3 rounded-xl bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-600 hover:to-teal-600 active:scale-95 text-white font-bold text-xs sm:text-sm border border-emerald-500/60 shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <Check className="w-4 h-4 stroke-[3]" />
-                  <span>予定を完了にする</span>
-                </button>
-              )}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>
