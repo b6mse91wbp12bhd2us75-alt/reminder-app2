@@ -25,8 +25,8 @@ import androidx.core.app.NotificationCompat;
 import java.io.File;
 
 /**
- * Native Android Foreground Service that plays loud alarm audio and vibrates.
- * Runs independently of the JavaScript / WebView environment.
+ * Native Android Foreground Service that plays loud alarm audio, vibrates,
+ * and launches AlarmActivity as a FullScreenIntent.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
@@ -98,19 +98,21 @@ public class AlarmService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        // 3. Build Open App Intent
-        Intent openAppIntent = new Intent(this, MainActivity.class);
-        openAppIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent openPendingIntent = PendingIntent.getActivity(
+        // 3. Build FullScreen Intent to launch AlarmActivity over lockscreen/homescreen
+        Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
+        fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
+        fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
+        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
             this,
-            0,
-            openAppIntent,
+            1,
+            fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 4. Build Notification
+        // 4. Build Notification with setFullScreenIntent
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle("⏰ " + title)
@@ -118,7 +120,8 @@ public class AlarmService extends Service {
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(openPendingIntent)
+            .setContentIntent(fullScreenPendingIntent)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
             .addAction(0, "🛑 STOP アラーム停止", stopPendingIntent)
             .setOngoing(true)
             .setAutoCancel(false);
@@ -131,7 +134,14 @@ public class AlarmService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream
+        // Direct Activity Launch for unlocked / active device
+        try {
+            startActivity(fullScreenIntent);
+        } catch (Exception e) {
+            Log.w(TAG, "Direct startActivity for AlarmActivity failed, relying on fullScreenIntent", e);
+        }
+
+        // 5. Play Audio
         playAudio(audioPath, volume);
 
         // 6. Vibrate
@@ -160,10 +170,7 @@ public class AlarmService extends Service {
                 mediaPlayer = null;
             }
 
-            if (volume <= 0) {
-                Log.d(TAG, "Volume is 0% (Muted / Vibrate only). Skipping MediaPlayer.");
-                return;
-            }
+            if (volume <= 0) return;
 
             float volFloat = Math.max(0.01f, Math.min(1.0f, volume / 100.0f));
 
@@ -178,26 +185,25 @@ public class AlarmService extends Service {
             boolean audioSet = false;
 
             if (audioPath != null && !audioPath.isEmpty()) {
-                File audioFile = new File(audioPath);
-                if (audioFile.exists() && audioFile.length() > 0) {
-                    try {
-                        mediaPlayer.setDataSource(audioFile.getAbsolutePath());
-                        audioSet = true;
-                    } catch (Exception e) {
-                        Log.w(TAG, "Failed to load custom audio file: " + audioPath, e);
-                    }
+                File customFile = new File(audioPath);
+                if (customFile.exists() && customFile.length() > 0) {
+                    mediaPlayer.setDataSource(customFile.getAbsolutePath());
+                    audioSet = true;
                 }
             }
 
             if (!audioSet) {
                 try {
-                    AssetFileDescriptor afd = getAssets().openFd("public/assets/alarm_sound.mp3");
-                    mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
-                    afd.close();
-                    audioSet = true;
-                } catch (Exception e) {
-                    Log.w(TAG, "Asset alarm_sound.mp3 not found, falling back to system ringtone", e);
-                }
+                    int rawResId = getResources().getIdentifier("alarm_ring", "raw", getPackageName());
+                    if (rawResId != 0) {
+                        AssetFileDescriptor afd = getResources().openRawResourceFd(rawResId);
+                        if (afd != null) {
+                            mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                            afd.close();
+                            audioSet = true;
+                        }
+                    }
+                } catch (Exception ignored) {}
             }
 
             if (!audioSet) {
@@ -212,12 +218,11 @@ public class AlarmService extends Service {
             mediaPlayer.prepare();
             mediaPlayer.start();
         } catch (Exception e) {
-            Log.e(TAG, "Error playing audio in AlarmService", e);
+            Log.e(TAG, "Failed to play alarm audio", e);
         }
     }
 
     private void stopAlarm() {
-        Log.d(TAG, "Stopping alarm and foreground service");
         if (autoStopHandler != null) {
             autoStopHandler.removeCallbacksAndMessages(null);
             autoStopHandler = null;
@@ -251,25 +256,6 @@ public class AlarmService extends Service {
         stopSelf();
     }
 
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "リマインダー大音量アラーム",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            channel.setDescription("予定時刻に大音量アラームとバイブレーションを作動させます");
-            channel.enableVibration(true);
-            channel.setVibrationPattern(new long[]{0, 800, 400, 800, 400, 800, 400});
-            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-
-            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
-        }
-    }
-
     @Override
     public void onDestroy() {
         stopAlarm();
@@ -279,5 +265,24 @@ public class AlarmService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                CHANNEL_ID,
+                "リマインダーアラーム (ネイティブ)",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            channel.setDescription("予定の時刻に確実に通知・鳴動する高優先度チャンネル");
+            channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            channel.enableVibration(true);
+            channel.setSound(null, null);
+
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+        }
     }
 }
