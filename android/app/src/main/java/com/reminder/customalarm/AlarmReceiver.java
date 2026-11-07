@@ -10,11 +10,6 @@ import android.util.Log;
 import androidx.core.content.ContextCompat;
 import java.util.Calendar;
 
-/**
- * Native BroadcastReceiver triggered by Android AlarmManager.setAlarmClock.
- * Wakes device even when app is swiped away or screen is OFF.
- * Also automatically reschedules repeating alarms (毎日, 毎週, etc.) for the next occurrence!
- */
 public class AlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "AlarmReceiver";
 
@@ -22,7 +17,25 @@ public class AlarmReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         Log.d(TAG, "Native Alarm Triggered! Action: " + intent.getAction());
 
-        // 1. Start foreground alarm service to ring sound & vibrate
+        String title = intent.getStringExtra("TITLE");
+        String memo = intent.getStringExtra("MEMO");
+
+        // 1. 時間になった瞬間にダイレクトに全画面AlarmActivityを強制起動
+        try {
+            Intent fullScreenIntent = new Intent(context, AlarmActivity.class);
+            fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
+            fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
+            fullScreenIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+            );
+            context.startActivity(fullScreenIntent);
+        } catch (Exception e) {
+            Log.e(TAG, "Direct launch AlarmActivity failed", e);
+        }
+
+        // 2. 音とバイブを鳴らすフォアグラウンドサービスを起動
         Intent serviceIntent = new Intent(context, AlarmService.class);
         serviceIntent.setAction(AlarmService.ACTION_START_ALARM);
         if (intent.getExtras() != null) {
@@ -35,13 +48,12 @@ public class AlarmReceiver extends BroadcastReceiver {
             Log.e(TAG, "Failed to start AlarmService", e);
         }
 
-        // 2. Automatically reschedule next occurrence for repeating alarms (e.g. 毎日, 毎週)
+        // 3. リピート予定の次回自動再設定
         try {
             String id = intent.getStringExtra("ID");
             String repeat = intent.getStringExtra("REPEAT");
             long timestamp = intent.getLongExtra("TIMESTAMP", 0);
 
-            // Do not reschedule advance notice alarms or one-time alarms
             if (id != null && !id.contains("_notice_") && repeat != null && !repeat.equals("なし") && timestamp > 0) {
                 long nextTimestamp = calculateNextTimestamp(timestamp, repeat);
                 if (nextTimestamp > System.currentTimeMillis()) {
@@ -49,7 +61,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to check or reschedule repeating alarm", e);
+            Log.e(TAG, "Failed to reschedule", e);
         }
     }
 
@@ -93,7 +105,9 @@ public class AlarmReceiver extends BroadcastReceiver {
 
             int requestCode = Math.abs(id.hashCode());
 
-            Intent showIntent = new Intent(context, MainActivity.class);
+            Intent showIntent = new Intent(context, AlarmActivity.class);
+            showIntent.putExtra(AlarmActivity.EXTRA_TITLE, originalIntent.getStringExtra("TITLE"));
+            showIntent.putExtra(AlarmActivity.EXTRA_MEMO, originalIntent.getStringExtra("MEMO"));
             showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent showPendingIntent = PendingIntent.getActivity(
                 context,
@@ -118,9 +132,8 @@ public class AlarmReceiver extends BroadcastReceiver {
 
             AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(nextTimestamp, showPendingIntent);
             alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-            Log.d(TAG, "Successfully auto-rescheduled next repeating alarm for " + id + " at " + nextTimestamp);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to reschedule next repeating alarm", e);
+            Log.e(TAG, "Failed to reschedule", e);
         }
     }
 }
