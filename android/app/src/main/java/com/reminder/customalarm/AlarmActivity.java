@@ -1,6 +1,7 @@
 package com.reminder.customalarm;
 
 import android.app.Activity;
+import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
@@ -19,8 +20,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Android 10〜14完全対応の全面全画面アラームActivity。
- * ロック画面やホーム画面の上から強制的に全画面で割り込み起動します。
+ * 既存のアラームアプリと同様に、ホーム画面やロック画面の上に直接強制起動する全面全画面Activity。
  */
 public class AlarmActivity extends Activity {
     public static final String EXTRA_ID = "ID";
@@ -31,11 +31,15 @@ public class AlarmActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 画面を強制点灯させ、キーガード・ロック画面・ホーム画面の上に全面表示する
+        // 1. Android 10〜14での最前面強制割り込みフラグ設定
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
+            KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            if (km != null) {
+                km.requestDismissKeyguard(this, null);
+            }
         } else {
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
@@ -45,12 +49,13 @@ public class AlarmActivity extends Activity {
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        // 2. タイトルとメモの取得
         Intent intent = getIntent();
         String title = intent != null && intent.hasExtra(EXTRA_TITLE) ? intent.getStringExtra(EXTRA_TITLE) : "リマインダー";
         if (title == null || title.isEmpty()) title = "リマインダー";
         String memo = intent != null && intent.hasExtra(EXTRA_MEMO) ? intent.getStringExtra(EXTRA_MEMO) : "";
 
-        // XMLレイアウトに依存せずプログラムで直接100%全画面ビューを生成
+        // 3. 緑の全面表示ビューを直接生成してセット
         setContentView(createFullScreenView(title, memo));
     }
 
@@ -178,7 +183,7 @@ public class AlarmActivity extends Activity {
         scrollView.addView(card);
         root.addView(scrollView);
 
-        // 下部：横長・超大型「停止」ボタン
+        // 下部：横長・大型「停止」ボタン
         Button stopBtn = new Button(this);
         stopBtn.setText("停止");
         stopBtn.setTextColor(Color.WHITE);
@@ -199,7 +204,6 @@ public class AlarmActivity extends Activity {
         stopBtn.setLayoutParams(btnParams);
 
         stopBtn.setOnClickListener(v -> {
-            // アラームサービス（音とバイブ）を停止
             Intent stopIntent = new Intent(this, AlarmService.class);
             stopIntent.setAction(AlarmService.ACTION_STOP_ALARM);
             startService(stopIntent);
