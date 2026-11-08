@@ -21,9 +21,10 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 /**
- * Fullscreen Native Activity launched directly by Android AlarmManager.
- * Pops up over lockscreen, homescreen, or any active app.
- * Calming pale/forest green aesthetic with giant STOP button.
+ * Fullscreen Native Activity launched as a full-screen intent when an alarm rings.
+ * Works even when the screen is locked or the device is sleeping.
+ * Designed with a calming pale/sage green aesthetic, dedicated top space for heads-up banner,
+ * and a large wide STOP button.
  */
 public class AlarmActivity extends AppCompatActivity {
     public static final String EXTRA_ID = "ID";
@@ -75,8 +76,9 @@ public class AlarmActivity extends AppCompatActivity {
     }
 
     private View createFullScreenAlarmView(String title, String memo, boolean isPreNotice) {
-        int paddingHoriz = dpToPx(24);
-        int paddingVert = dpToPx(36);
+        int paddingHoriz = dpToPx(20);
+        int paddingTop = dpToPx(104); // 黒ベタ小窓用の最上部クリアランス（小窓が被っても重ならない）
+        int paddingBottom = dpToPx(24);
 
         // Root container: Soft sage/forest green gradient background
         LinearLayout root = new LinearLayout(this);
@@ -86,7 +88,7 @@ public class AlarmActivity extends AppCompatActivity {
         ));
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(paddingHoriz, paddingVert, paddingHoriz, paddingVert);
+        root.setPadding(paddingHoriz, paddingTop, paddingHoriz, paddingBottom);
 
         // Gradient background (#2e4a3e -> #243b32 -> #1a2c25)
         GradientDrawable backgroundGradient = new GradientDrawable(
@@ -120,7 +122,7 @@ public class AlarmActivity extends AppCompatActivity {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        pillParams.topMargin = dpToPx(16);
+        pillParams.topMargin = dpToPx(8);
         root.addView(headerPill, pillParams);
 
         // Subheader status text
@@ -133,7 +135,7 @@ public class AlarmActivity extends AppCompatActivity {
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
-        subParams.topMargin = dpToPx(10);
+        subParams.topMargin = dpToPx(8);
         root.addView(subHeader, subParams);
 
         // Center Content ScrollView
@@ -143,7 +145,7 @@ public class AlarmActivity extends AppCompatActivity {
             0,
             1.0f
         );
-        scrollParams.setMargins(0, dpToPx(20), 0, dpToPx(20));
+        scrollParams.setMargins(0, dpToPx(14), 0, dpToPx(16));
         centerScroll.setLayoutParams(scrollParams);
         centerScroll.setFillViewport(true);
 
