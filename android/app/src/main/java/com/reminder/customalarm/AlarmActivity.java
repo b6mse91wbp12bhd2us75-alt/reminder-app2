@@ -20,7 +20,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * 既存のアラームアプリと同様に、ホーム画面やロック画面の上に直接強制起動する全面全画面Activity。
+ * ホーム画面やロック画面の上に直接強制起動する全面全画面Activity。
  */
 public class AlarmActivity extends Activity {
     public static final String EXTRA_ID = "ID";
@@ -47,7 +47,10 @@ public class AlarmActivity extends Activity {
                 | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             );
         }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            | WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
+        );
 
         // 2. タイトルとメモの取得
         Intent intent = getIntent();
@@ -63,7 +66,6 @@ public class AlarmActivity extends Activity {
         int padH = dpToPx(24);
         int padV = dpToPx(36);
 
-        // ルート画面：画面全体（100% MATCH_PARENT）
         LinearLayout root = new LinearLayout(this);
         root.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
