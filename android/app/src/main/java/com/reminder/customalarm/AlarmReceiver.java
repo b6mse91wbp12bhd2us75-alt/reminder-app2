@@ -10,6 +10,10 @@ import android.util.Log;
 import androidx.core.content.ContextCompat;
 import java.util.Calendar;
 
+/**
+ * Native BroadcastReceiver triggered by Android AlarmManager.setAlarmClock.
+ * Immediately opens the full-screen green AlarmActivity over homescreen/lockscreen!
+ */
 public class AlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "AlarmReceiver";
 
@@ -20,7 +24,7 @@ public class AlarmReceiver extends BroadcastReceiver {
         String title = intent.getStringExtra("TITLE");
         String memo = intent.getStringExtra("MEMO");
 
-        // 1. 時間になった瞬間にダイレクトに全画面AlarmActivityを強制起動
+        // 1. ホーム画面やロック画面の上から、直接「緑の全面画面」を最前面にドカンと起動！
         try {
             Intent fullScreenIntent = new Intent(context, AlarmActivity.class);
             fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
@@ -29,13 +33,15 @@ public class AlarmReceiver extends BroadcastReceiver {
                 Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP
                 | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP
             );
             context.startActivity(fullScreenIntent);
+            Log.d(TAG, "Directly started AlarmActivity in full-screen over homescreen");
         } catch (Exception e) {
-            Log.e(TAG, "Direct launch AlarmActivity failed", e);
+            Log.e(TAG, "Failed to launch full-screen AlarmActivity directly", e);
         }
 
-        // 2. 音とバイブを鳴らすフォアグラウンドサービスを起動
+        // 2. 音とバイブを鳴らすサービスをバックグラウンド起動
         Intent serviceIntent = new Intent(context, AlarmService.class);
         serviceIntent.setAction(AlarmService.ACTION_START_ALARM);
         if (intent.getExtras() != null) {
@@ -61,7 +67,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to reschedule", e);
+            Log.e(TAG, "Failed to reschedule next repeating alarm", e);
         }
     }
 
