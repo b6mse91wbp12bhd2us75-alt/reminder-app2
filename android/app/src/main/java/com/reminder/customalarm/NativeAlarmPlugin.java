@@ -4,7 +4,9 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
+import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
 import com.getcapacitor.JSObject;
@@ -15,6 +17,10 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileOutputStream;
 
+/**
+ * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
+ * Directly launches AlarmActivity fullscreen without intermediate heads-up banner.
+ */
 @CapacitorPlugin(name = "NativeAlarm")
 public class NativeAlarmPlugin extends Plugin {
     private static final String TAG = "NativeAlarmPlugin";
@@ -59,9 +65,9 @@ public class NativeAlarmPlugin extends Plugin {
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         int requestCode = Math.abs(id.hashCode());
 
-        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
+        Intent alarmIntent = new Intent(context, AlarmActivity.class);
         alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        PendingIntent pendingIntent = PendingIntent.getBroadcast(
+        PendingIntent pendingIntent = PendingIntent.getActivity(
             context,
             requestCode,
             alarmIntent,
@@ -73,6 +79,7 @@ public class NativeAlarmPlugin extends Plugin {
             pendingIntent.cancel();
         }
 
+        // Delete associated audio file if exists
         try {
             File audioFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
             if (audioFile.exists()) {
@@ -130,10 +137,36 @@ public class NativeAlarmPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void checkOverlayPermission(PluginCall call) {
+        boolean canDraw = true;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            canDraw = Settings.canDrawOverlays(getContext());
+        }
+        JSObject ret = new JSObject();
+        ret.put("granted", canDraw);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void requestOverlayPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Context context = getContext();
+            if (!Settings.canDrawOverlays(context)) {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName()));
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                context.startActivity(intent);
+            }
+        }
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        call.resolve(ret);
+    }
+
+    @PluginMethod
     public void testAlarmNow(PluginCall call) {
         int delaySeconds = call.getInt("delaySeconds", 10);
         String title = call.getString("title", "【テスト成功】大音量アラーム");
-        String memo = call.getString("memo", "全面表示テストに成功しました！");
+        String memo = call.getString("memo", "アプリを完全に閉じた状態での発火テストに成功しました！");
         String audioBase64 = call.getString("audioBase64");
         Integer volume = call.getInt("volume", 70);
 
@@ -157,6 +190,7 @@ public class NativeAlarmPlugin extends Plugin {
             throw new IllegalStateException("AlarmManager not available");
         }
 
+        // Save custom audio file if provided
         String audioFilePath = null;
         if (audioBase64 != null && !audioBase64.isEmpty()) {
             audioFilePath = saveBase64ToFile(context, id, audioBase64);
@@ -164,39 +198,35 @@ public class NativeAlarmPlugin extends Plugin {
 
         int requestCode = Math.abs(id.hashCode());
 
-        // ★ 最重要ポイント：AlarmClockInfo に「AlarmActivity（全画面）」を直結
-        Intent showIntent = new Intent(context, AlarmActivity.class);
-        showIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
-        showIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
-        showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent showPendingIntent = PendingIntent.getActivity(
+        // Direct full-screen AlarmActivity intent launched by Android AlarmManager
+        Intent alarmActivityIntent = new Intent(context, AlarmActivity.class);
+        alarmActivityIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_ID, id);
+        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
+        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
+        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_TIME, timestamp);
+        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_IS_PRE_NOTICE, id != null && id.contains("_notice_"));
+        alarmActivityIntent.putExtra("REPEAT", repeat);
+        alarmActivityIntent.putExtra("AUDIO_FILE", audioFilePath);
+        alarmActivityIntent.putExtra("DURATION", duration);
+        alarmActivityIntent.putExtra("VOLUME", volume);
+        alarmActivityIntent.setFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK
+            | Intent.FLAG_ACTIVITY_CLEAR_TOP
+            | Intent.FLAG_ACTIVITY_SINGLE_TOP
+        );
+
+        PendingIntent alarmActivityPendingIntent = PendingIntent.getActivity(
             context,
             requestCode,
-            showIntent,
+            alarmActivityIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
-        alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        alarmIntent.putExtra("ID", id);
-        alarmIntent.putExtra("TITLE", title);
-        alarmIntent.putExtra("MEMO", memo);
-        alarmIntent.putExtra("AUDIO_FILE", audioFilePath);
-        alarmIntent.putExtra("DURATION", duration);
-        alarmIntent.putExtra("VOLUME", volume);
-        alarmIntent.putExtra("REPEAT", repeat);
-        alarmIntent.putExtra("TIMESTAMP", timestamp);
-
-        PendingIntent alarmPendingIntent = PendingIntent.getBroadcast(
-            context,
-            requestCode,
-            alarmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
-        );
-
-        AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
-        alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-        Log.d(TAG, "Scheduled AlarmClock pointing directly to AlarmActivity for " + id);
+        // Schedule via setAlarmClock (Directly pops up AlarmActivity full-screen without heads-up banner)
+        AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, alarmActivityPendingIntent);
+        alarmManager.setAlarmClock(clockInfo, alarmActivityPendingIntent);
+        Log.d(TAG, "Scheduled native direct AlarmClock for ID: " + id + " at: " + timestamp);
 
         return audioFilePath;
     }
@@ -218,9 +248,10 @@ public class NativeAlarmPlugin extends Plugin {
             fos.flush();
             fos.close();
 
+            Log.d(TAG, "Saved custom audio file to: " + destFile.getAbsolutePath());
             return destFile.getAbsolutePath();
         } catch (Exception e) {
-            Log.e(TAG, "Failed to save base64 audio", e);
+            Log.e(TAG, "Failed to save base64 audio to file", e);
             return null;
         }
     }
