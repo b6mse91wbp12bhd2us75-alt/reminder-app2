@@ -24,7 +24,7 @@
 
         </activity>
 
-        <!-- 全面表示専用のアクティビティ（ロック画面・ホーム画面の上に強制全画面起動） -->
+        <!-- 全面表示専用のアクティビティ（ホーム画面やロック画面の上に直接強制起動） -->
         <activity
             android:name=".AlarmActivity"
             android:showWhenLocked="true"
@@ -61,6 +61,8 @@
         </provider>
     </application>
 
+    <!-- 権限設定：ホーム画面や他のアプリの上に直接全画面を割り込み表示させる権限 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
