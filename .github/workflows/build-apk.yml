@@ -37,14 +37,6 @@ jobs:
       - name: Sync Capacitor Android
         run: npx cap sync android
 
-      - name: Generate Persistent Fixed Keystore for Seamless Updates
-        run: |
-          mkdir -p android/app/keystore
-          keytool -genkeypair -v -keystore android/app/keystore/reminder-fixed.keystore \
-            -alias reminderkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass androidreminder123 -keypass androidreminder123 \
-            -dname "CN=ReminderApp, OU=App, O=Reminder, L=Tokyo, ST=Tokyo, C=JP"
-
       - name: Build Android Debug APK
         run: |
           cd android
