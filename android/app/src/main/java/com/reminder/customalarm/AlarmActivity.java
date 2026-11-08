@@ -1,7 +1,5 @@
 package com.reminder.customalarm;
 
-import android.app.Activity;
-import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
@@ -18,28 +16,31 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.util.Log;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 /**
- * ホーム画面やロック画面の上に直接強制起動する全面全画面Activity。
+ * Fullscreen Native Activity launched directly by Android AlarmManager.
+ * Pops up over lockscreen, homescreen, or any active app.
+ * Calming pale/forest green aesthetic with giant STOP button.
  */
-public class AlarmActivity extends Activity {
+public class AlarmActivity extends AppCompatActivity {
     public static final String EXTRA_ID = "ID";
     public static final String EXTRA_TITLE = "TITLE";
     public static final String EXTRA_MEMO = "MEMO";
+    public static final String EXTRA_TIME = "TARGET_TIME";
+    public static final String EXTRA_IS_PRE_NOTICE = "IS_PRE_NOTICE";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 1. Android 10〜14での最前面強制割り込みフラグ設定
+        // Turn on screen, show over lockscreen, dismiss keyguard
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
-            KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-            if (km != null) {
-                km.requestDismissKeyguard(this, null);
-            }
         } else {
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
@@ -47,25 +48,37 @@ public class AlarmActivity extends Activity {
                 | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
             );
         }
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            | WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
-        );
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // 2. タイトルとメモの取得
+        // Read intent extras
         Intent intent = getIntent();
         String title = intent != null && intent.hasExtra(EXTRA_TITLE) ? intent.getStringExtra(EXTRA_TITLE) : "リマインダー";
         if (title == null || title.isEmpty()) title = "リマインダー";
         String memo = intent != null && intent.hasExtra(EXTRA_MEMO) ? intent.getStringExtra(EXTRA_MEMO) : "";
+        boolean isPreNotice = intent != null && intent.getBooleanExtra(EXTRA_IS_PRE_NOTICE, false);
 
-        // 3. 緑の全面表示ビューを直接生成してセット
-        setContentView(createFullScreenView(title, memo));
+        // Build View programmatically to guarantee 100% full-screen without XML inflate dependency
+        View contentView = createFullScreenAlarmView(title, memo, isPreNotice);
+        setContentView(contentView);
+
+        // Start foreground AlarmService for loud sound & vibration
+        try {
+            Intent serviceIntent = new Intent(this, AlarmService.class);
+            serviceIntent.setAction(AlarmService.ACTION_START_ALARM);
+            if (intent != null && intent.getExtras() != null) {
+                serviceIntent.putExtras(intent.getExtras());
+            }
+            ContextCompat.startForegroundService(this, serviceIntent);
+        } catch (Exception e) {
+            Log.e("AlarmActivity", "Failed to start AlarmService from AlarmActivity", e);
+        }
     }
 
-    private View createFullScreenView(String title, String memo) {
-        int padH = dpToPx(24);
-        int padV = dpToPx(36);
+    private View createFullScreenAlarmView(String title, String memo, boolean isPreNotice) {
+        int paddingHoriz = dpToPx(24);
+        int paddingVert = dpToPx(36);
 
+        // Root container: Soft sage/forest green gradient background
         LinearLayout root = new LinearLayout(this);
         root.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -73,64 +86,66 @@ public class AlarmActivity extends Activity {
         ));
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(padH, padV, padH, padV);
+        root.setPadding(paddingHoriz, paddingVert, paddingHoriz, paddingVert);
 
-        // 落ち着いた薄緑（フォレストグリーン）のグラデーション背景
-        GradientDrawable bg = new GradientDrawable(
+        // Gradient background (#2e4a3e -> #243b32 -> #1a2c25)
+        GradientDrawable backgroundGradient = new GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
             new int[]{Color.parseColor("#2e4a3e"), Color.parseColor("#243b32"), Color.parseColor("#1a2c25")}
         );
-        root.setBackground(bg);
+        root.setBackground(backgroundGradient);
 
-        // 上部バッジ
-        LinearLayout pill = new LinearLayout(this);
-        pill.setOrientation(LinearLayout.HORIZONTAL);
-        pill.setGravity(Gravity.CENTER);
-        int pillH = dpToPx(16);
-        int pillV = dpToPx(8);
-        pill.setPadding(pillH, pillV, pillH, pillV);
+        // Top Header: "リマインダー通知" pill
+        LinearLayout headerPill = new LinearLayout(this);
+        headerPill.setOrientation(LinearLayout.HORIZONTAL);
+        headerPill.setGravity(Gravity.CENTER);
+        int pillPadH = dpToPx(16);
+        int pillPadV = dpToPx(8);
+        headerPill.setPadding(pillPadH, pillPadV, pillPadH, pillPadV);
+
         GradientDrawable pillBg = new GradientDrawable();
         pillBg.setColor(Color.parseColor("#446d5b"));
         pillBg.setCornerRadius(dpToPx(20));
         pillBg.setStroke(dpToPx(1), Color.parseColor("#68a187"));
-        pill.setBackground(pillBg);
+        headerPill.setBackground(pillBg);
 
-        TextView pillText = new TextView(this);
-        pillText.setText("🔔 リマインダー通知");
-        pillText.setTextColor(Color.parseColor("#e6fffa"));
-        pillText.setTextSize(16);
-        pillText.setTypeface(Typeface.DEFAULT_BOLD);
-        pill.addView(pillText);
+        TextView headerText = new TextView(this);
+        headerText.setText(isPreNotice ? "📢 事前通知" : "🔔 リマインダー通知");
+        headerText.setTextColor(Color.parseColor("#e6fffa"));
+        headerText.setTextSize(16);
+        headerText.setTypeface(Typeface.DEFAULT_BOLD);
+        headerPill.addView(headerText);
 
         LinearLayout.LayoutParams pillParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
         pillParams.topMargin = dpToPx(16);
-        root.addView(pill, pillParams);
+        root.addView(headerPill, pillParams);
 
-        TextView sub = new TextView(this);
-        sub.setText("時間になりました");
-        sub.setTextColor(Color.parseColor("#b2f5ea"));
-        sub.setTextSize(14);
-        sub.setGravity(Gravity.CENTER);
+        // Subheader status text
+        TextView subHeader = new TextView(this);
+        subHeader.setText(isPreNotice ? "まもなく予定の時刻です" : "時間になりました");
+        subHeader.setTextColor(Color.parseColor("#b2f5ea"));
+        subHeader.setTextSize(14);
+        subHeader.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams subParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         );
         subParams.topMargin = dpToPx(10);
-        root.addView(sub, subParams);
+        root.addView(subHeader, subParams);
 
-        // 中央：予定内容（スクロール対応）
-        ScrollView scrollView = new ScrollView(this);
+        // Center Content ScrollView
+        ScrollView centerScroll = new ScrollView(this);
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             0,
             1.0f
         );
         scrollParams.setMargins(0, dpToPx(20), 0, dpToPx(20));
-        scrollView.setLayoutParams(scrollParams);
-        scrollView.setFillViewport(true);
+        centerScroll.setLayoutParams(scrollParams);
+        centerScroll.setFillViewport(true);
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -144,6 +159,7 @@ public class AlarmActivity extends Activity {
         cardBg.setStroke(dpToPx(1), Color.parseColor("#3b5c4e"));
         card.setBackground(cardBg);
 
+        // Category label
         TextView label = new TextView(this);
         label.setText("【予定内容】");
         label.setTextColor(Color.parseColor("#68d391"));
@@ -151,6 +167,7 @@ public class AlarmActivity extends Activity {
         label.setTypeface(Typeface.DEFAULT_BOLD);
         card.addView(label);
 
+        // Large title
         TextView titleView = new TextView(this);
         titleView.setText(title);
         titleView.setTextColor(Color.WHITE);
@@ -164,6 +181,7 @@ public class AlarmActivity extends Activity {
         titleParams.topMargin = dpToPx(12);
         card.addView(titleView, titleParams);
 
+        // Memo if present
         if (memo != null && !memo.trim().isEmpty()) {
             View divider = new View(this);
             divider.setBackgroundColor(Color.parseColor("#2d4a3e"));
@@ -182,10 +200,10 @@ public class AlarmActivity extends Activity {
             card.addView(memoView);
         }
 
-        scrollView.addView(card);
-        root.addView(scrollView);
+        centerScroll.addView(card);
+        root.addView(centerScroll);
 
-        // 下部：横長・大型「停止」ボタン
+        // Bottom Action Section: Giant Wide STOP button
         Button stopBtn = new Button(this);
         stopBtn.setText("停止");
         stopBtn.setTextColor(Color.WHITE);
@@ -193,7 +211,7 @@ public class AlarmActivity extends Activity {
         stopBtn.setTypeface(Typeface.DEFAULT_BOLD);
 
         GradientDrawable stopBg = new GradientDrawable();
-        stopBg.setColor(Color.parseColor("#059669")); // エメラルドグリーン
+        stopBg.setColor(Color.parseColor("#059669")); // Emerald green
         stopBg.setCornerRadius(dpToPx(18));
         stopBg.setStroke(dpToPx(2), Color.parseColor("#a7f3d0"));
         stopBtn.setBackground(stopBg);
@@ -205,15 +223,19 @@ public class AlarmActivity extends Activity {
         btnParams.bottomMargin = dpToPx(12);
         stopBtn.setLayoutParams(btnParams);
 
-        stopBtn.setOnClickListener(v -> {
-            Intent stopIntent = new Intent(this, AlarmService.class);
-            stopIntent.setAction(AlarmService.ACTION_STOP_ALARM);
-            startService(stopIntent);
-            finish();
-        });
+        stopBtn.setOnClickListener(v -> stopAlarmAndFinish());
         root.addView(stopBtn);
 
         return root;
+    }
+
+    private void stopAlarmAndFinish() {
+        // Stop foreground alarm service
+        Intent stopService = new Intent(this, AlarmService.class);
+        stopService.setAction(AlarmService.ACTION_STOP_ALARM);
+        startService(stopService);
+
+        finish();
     }
 
     private int dpToPx(int dp) {
