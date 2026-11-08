@@ -25,15 +25,13 @@ import java.io.File;
 
 /**
  * Native Android Alarm Service.
- * Uses a completely new NotificationChannel to completely kill the old cached heads-up banner.
- * Displays ONLY the green full-screen AlarmActivity immediately!
+ * Correctly launches AlarmActivity as a true FullScreenIntent on Android 10〜14.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
     public static final String ACTION_START_ALARM = "com.reminder.customalarm.ACTION_START_ALARM";
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
-    // 古いキャッシュを完全に破棄するため新しいチャンネルIDに変更
-    public static final String CHANNEL_ID = "reminder_fullscreen_alarm_channel_v3";
+    public static final String CHANNEL_ID = "reminder_fullscreen_alarm_channel_v4";
     private static final int NOTIFICATION_ID = 987654;
 
     private MediaPlayer mediaPlayer;
@@ -78,7 +76,7 @@ public class AlarmService extends Service {
     }
 
     private void startAlarmFullScreen(String title, String memo, String audioPath, int durationSec, int volume) {
-        // 1. 端末画面をフル点灯＆ウェイク
+        // 1. 画面を即時点灯（WAKE_LOCK）
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
@@ -92,7 +90,7 @@ public class AlarmService extends Service {
             Log.w(TAG, "Failed to acquire wakelock", e);
         }
 
-        // 2. 緑の全面表示(AlarmActivity)を最優先で直接起動！
+        // 2. 全面表示用のアクティビティIntent
         Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
@@ -109,22 +107,24 @@ public class AlarmService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        // ホーム画面から直接全画面を起動
         try {
             startActivity(fullScreenIntent);
         } catch (Exception e) {
-            Log.e(TAG, "Direct startActivity failed", e);
+            Log.e(TAG, "startActivity failed, fallback to fullScreenIntent", e);
         }
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 3. バックグラウンド常駐のためのサイレント通知（黒い小窓は絶対に出さない）
+        // 3. 全画面起動を保証するフルスクリーン通知
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle(title)
-            .setContentText("アラーム作動中")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentText("アラーム鳴動中")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
             .setOngoing(true)
             .setAutoCancel(false);
@@ -266,21 +266,14 @@ public class AlarmService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
-                // 古いキャッシュチャンネルを削除
-                try {
-                    manager.deleteNotificationChannel("reminder_native_alarm_channel_v1");
-                    manager.deleteNotificationChannel("reminder_native_alarm_channel_v2");
-                } catch (Exception ignored) {}
-
-                // 新チャンネル作成（小窓が出ないLOW優先度）
                 NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "リマインダーアラーム (直接全面起動)",
-                    NotificationManager.IMPORTANCE_LOW
+                    "リマインダー全面アラーム",
+                    NotificationManager.IMPORTANCE_HIGH
                 );
                 channel.setDescription("全面表示を直接起動するチャンネル");
-                channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
-                channel.enableVibration(false);
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                channel.enableVibration(true);
                 channel.setSound(null, null);
 
                 manager.createNotificationChannel(channel);
