@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.content.res.AssetFileDescriptor;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -24,13 +25,14 @@ import androidx.core.app.NotificationCompat;
 import java.io.File;
 
 /**
- * Native Android Foreground Service for loud alarm audio playback and vibration.
- * Automatically looks up persistent named audio files from disk.
+ * Native Android Foreground Service that plays loud alarm audio and vibrates.
+ * Runs independently of the JavaScript / WebView environment.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
     public static final String ACTION_START_ALARM = "com.reminder.customalarm.ACTION_START_ALARM";
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
+    // 古いキャッシュを完全に破棄するため新しいチャンネルIDに変更
     public static final String CHANNEL_ID = "reminder_silent_service_v4";
     private static final int NOTIFICATION_ID = 987654;
 
@@ -91,7 +93,17 @@ public class AlarmService extends Service {
             Log.w(TAG, "Failed to acquire wakelock", e);
         }
 
-        // 2. FullScreen Intent for notification click fallback
+        // 2. Build Stop Intent
+        Intent stopIntent = new Intent(this, AlarmService.class);
+        stopIntent.setAction(ACTION_STOP_ALARM);
+        PendingIntent stopPendingIntent = PendingIntent.getService(
+            this,
+            0,
+            stopIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+        );
+
+        // 3. Build FullScreen Intent to launch AlarmActivity over lockscreen/homescreen
         Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
@@ -105,7 +117,7 @@ public class AlarmService extends Service {
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 3. Silent foreground notification (NO heads-up black box)
+        // サイレント常駐通知（黒い小窓ヘッドアップは一切出さない）
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle(title)
@@ -126,14 +138,14 @@ public class AlarmService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // 4. Direct Activity Launch for unlocked / active device
+        // 画面点灯状態時の直接起動
         try {
             startActivity(fullScreenIntent);
         } catch (Exception e) {
-            Log.w(TAG, "Direct startActivity for AlarmActivity caught exception", e);
+            Log.w(TAG, "Direct startActivity failed", e);
         }
 
-        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream
+        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream with user volume
         playAudio(audioPath, soundName, volume);
 
         // 6. Vibrate
@@ -163,6 +175,7 @@ public class AlarmService extends Service {
             }
 
             if (volume <= 0) {
+                Log.d(TAG, "Volume is 0%. Skipping MediaPlayer.");
                 return;
             }
 
@@ -178,17 +191,17 @@ public class AlarmService extends Service {
 
             boolean audioSet = false;
 
-            // 1. Check if custom audio file exists via audioPath
+            // 1. 指定ファイルパスの確認
             if (audioPath != null && !audioPath.isEmpty()) {
                 File customFile = new File(audioPath);
                 if (customFile.exists() && customFile.length() > 0) {
                     mediaPlayer.setDataSource(customFile.getAbsolutePath());
                     audioSet = true;
-                    Log.d(TAG, "Playing custom external audio from file: " + customFile.getAbsolutePath());
+                    Log.d(TAG, "Playing custom external audio from: " + customFile.getAbsolutePath());
                 }
             }
 
-            // 2. Check if permanent named audio file exists in internal storage
+            // 2. 内部ストレージに永続保存されたMP3の確認
             if (!audioSet && soundName != null && !soundName.isEmpty()) {
                 String safeName = soundName.replaceAll("[^a-zA-Z0-9._-]", "_");
                 File namedFile = new File(getFilesDir(), "custom_audio_" + safeName + ".mp3");
@@ -199,7 +212,7 @@ public class AlarmService extends Service {
                 }
             }
 
-            // Fallback to raw/alarm_ring.wav
+            // Fallback: raw/alarm_ring.wav
             if (!audioSet) {
                 try {
                     int rawResId = getResources().getIdentifier("alarm_ring", "raw", getPackageName());
@@ -209,22 +222,18 @@ public class AlarmService extends Service {
                             mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
                             afd.close();
                             audioSet = true;
-                            Log.d(TAG, "Playing bundled raw/alarm_ring.wav");
                         }
                     }
-                } catch (Exception e) {
-                    Log.w(TAG, "Failed to load raw/alarm_ring", e);
-                }
+                } catch (Exception ignored) {}
             }
 
-            // Fallback to default system alarm ringtone
+            // Fallback: system alarm ringtone
             if (!audioSet) {
                 Uri defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
                 if (defaultAlarmUri == null) {
                     defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
                 }
                 mediaPlayer.setDataSource(this, defaultAlarmUri);
-                Log.d(TAG, "Playing system default alarm ringtone");
             }
 
             mediaPlayer.setLooping(true);
