@@ -24,14 +24,15 @@ import androidx.core.app.NotificationCompat;
 import java.io.File;
 
 /**
- * Native Android Alarm Service.
- * Correctly launches AlarmActivity as a true FullScreenIntent on Android 10〜14.
+ * Native Android Foreground Service for loud alarm audio playback and vibration.
+ * Uses a completely silent LOW-importance notification channel to ensure NO black heads-up banners appear.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
     public static final String ACTION_START_ALARM = "com.reminder.customalarm.ACTION_START_ALARM";
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
-    public static final String CHANNEL_ID = "reminder_fullscreen_alarm_channel_v4";
+    // 過去のキャッシュを完全破棄する新チャンネルID
+    public static final String CHANNEL_ID = "reminder_silent_service_v4";
     private static final int NOTIFICATION_ID = 987654;
 
     private MediaPlayer mediaPlayer;
@@ -62,44 +63,36 @@ public class AlarmService extends Service {
             String title = intent.getStringExtra("TITLE");
             if (title == null || title.isEmpty()) title = "リマインダー";
             String memo = intent.getStringExtra("MEMO");
-            if (memo == null) memo = "";
+            if (memo == null) memo = "予定の時刻になりました。確認してください。";
             String audioPath = intent.getStringExtra("AUDIO_FILE");
             int durationSec = intent.getIntExtra("DURATION", 15);
             if (durationSec <= 0) durationSec = 60;
             int volume = intent.getIntExtra("VOLUME", 70);
 
-            startAlarmFullScreen(title, memo, audioPath, durationSec, volume);
+            startAlarmWithNotification(title, memo, audioPath, durationSec, volume);
             return START_STICKY;
         }
 
         return START_NOT_STICKY;
     }
 
-    private void startAlarmFullScreen(String title, String memo, String audioPath, int durationSec, int volume) {
-        // 1. 画面を即時点灯（WAKE_LOCK）
+    private void startAlarmWithNotification(String title, String memo, String audioPath, int durationSec, int volume) {
+        // 1. Acquire WakeLock
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
-                wakeLock = pm.newWakeLock(
-                    PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE,
-                    "reminder:FullScreenWakeLock"
-                );
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "reminder:AlarmWakeLock");
                 wakeLock.acquire(10 * 60 * 1000L);
             }
         } catch (Exception e) {
             Log.w(TAG, "Failed to acquire wakelock", e);
         }
 
-        // 2. 全面表示用のアクティビティIntent
+        // 2. FullScreen Intent for notification click fallback
         Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
-        fullScreenIntent.addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK
-            | Intent.FLAG_ACTIVITY_CLEAR_TOP
-            | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-        );
-
+        fullScreenIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent fullScreenPendingIntent = PendingIntent.getActivity(
             this,
             1,
@@ -107,25 +100,18 @@ public class AlarmService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        // ホーム画面から直接全画面を起動
-        try {
-            startActivity(fullScreenIntent);
-        } catch (Exception e) {
-            Log.e(TAG, "startActivity failed, fallback to fullScreenIntent", e);
-        }
-
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 3. 全画面起動を保証するフルスクリーン通知
+        // 3. バックグラウンド常駐のためのサイレント通知（黒い小窓バナーは絶対に出さない）
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle(title)
-            .setContentText("アラーム鳴動中")
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setContentText("アラーム作動中")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .setContentIntent(fullScreenPendingIntent)
+            .setSilent(true)
             .setOngoing(true)
             .setAutoCancel(false);
 
@@ -137,10 +123,17 @@ public class AlarmService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // 4. 音声再生
+        // 4. Direct Activity Launch for unlocked / active device
+        try {
+            startActivity(fullScreenIntent);
+        } catch (Exception e) {
+            Log.w(TAG, "Direct startActivity for AlarmActivity caught exception", e);
+        }
+
+        // 5. Play Audio on USAGE_ALARM stream
         playAudio(audioPath, volume);
 
-        // 5. バイブレーション
+        // 6. Vibrate
         try {
             vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
             if (vibrator != null && vibrator.hasVibrator()) {
@@ -151,9 +144,10 @@ public class AlarmService extends Service {
             Log.w(TAG, "Vibration failed", e);
         }
 
-        // 6. 自動停止タイマー
+        // 7. Auto Stop timer
         autoStopHandler = new Handler(Looper.getMainLooper());
         autoStopHandler.postDelayed(() -> {
+            Log.d(TAG, "Alarm auto-stopped after duration: " + durationSec + "s");
             stopAlarm();
         }, durationSec * 1000L);
     }
@@ -165,7 +159,9 @@ public class AlarmService extends Service {
                 mediaPlayer = null;
             }
 
-            if (volume <= 0) return;
+            if (volume <= 0) {
+                return;
+            }
 
             float volFloat = Math.max(0.01f, Math.min(1.0f, volume / 100.0f));
 
@@ -198,7 +194,9 @@ public class AlarmService extends Service {
                             audioSet = true;
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to load raw/alarm_ring", e);
+                }
             }
 
             if (!audioSet) {
@@ -229,21 +227,21 @@ public class AlarmService extends Service {
                     mediaPlayer.stop();
                 }
                 mediaPlayer.release();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {}
             mediaPlayer = null;
         }
 
         if (vibrator != null) {
             try {
                 vibrator.cancel();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {}
             vibrator = null;
         }
 
         if (wakeLock != null && wakeLock.isHeld()) {
             try {
                 wakeLock.release();
-            } catch (Exception ignored) {}
+            } catch (Exception e) {}
             wakeLock = null;
         }
 
@@ -266,14 +264,24 @@ public class AlarmService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
+                // 過去の古いキャッシュチャンネルを完全削除
+                try {
+                    manager.deleteNotificationChannel("reminder_native_alarm_channel_v1");
+                    manager.deleteNotificationChannel("reminder_native_alarm_channel_v2");
+                    manager.deleteNotificationChannel("reminder_fullscreen_alarm_channel_v3");
+                    manager.deleteNotificationChannel("reminder_channel");
+                } catch (Exception ignored) {}
+
+                // 新チャンネル作成（黒い小窓を出さないサイレントLOW優先度）
                 NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "リマインダー全面アラーム",
-                    NotificationManager.IMPORTANCE_HIGH
+                    "リマインダーバックグラウンド再生",
+                    NotificationManager.IMPORTANCE_LOW
                 );
-                channel.setDescription("全面表示を直接起動するチャンネル");
-                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
-                channel.enableVibration(true);
+                channel.setDescription("全面表示中のバックグラウンド音声再生用");
+                channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+                channel.enableVibration(false);
+                channel.setShowBadge(false);
                 channel.setSound(null, null);
 
                 manager.createNotificationChannel(channel);
