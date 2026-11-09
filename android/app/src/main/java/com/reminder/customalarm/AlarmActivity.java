@@ -22,7 +22,7 @@ import androidx.core.content.ContextCompat;
 
 /**
  * Fullscreen Native Activity launched as a full-screen window when an alarm rings.
- * Works over lockscreen and dismisses keyguard directly.
+ * Shows directly over lockscreen with ZERO PIN bouncer veil.
  */
 public class AlarmActivity extends AppCompatActivity {
     public static final String EXTRA_ID = "ID";
@@ -35,26 +35,18 @@ public class AlarmActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Turn on screen, show over lockscreen, dismiss keyguard
+        // Turn on screen, show directly over lockscreen without showing PIN bouncer veil
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
-        } else {
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                | WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-            );
         }
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            android.app.KeyguardManager km = (android.app.KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-            if (km != null) {
-                km.requestDismissKeyguard(this, null);
-            }
-        }
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+            | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            | WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
+        );
 
         // Read intent extras
         Intent intent = getIntent();
