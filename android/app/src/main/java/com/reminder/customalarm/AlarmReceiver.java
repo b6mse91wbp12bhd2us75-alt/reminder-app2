@@ -12,7 +12,8 @@ import java.util.Calendar;
 
 /**
  * Native BroadcastReceiver triggered by Android AlarmManager.setAlarmClock.
- * Immediately opens the full-screen green AlarmActivity over homescreen/lockscreen!
+ * Wakes device even when app is swiped away or screen is OFF.
+ * Also automatically reschedules repeating alarms (毎日, 毎週, etc.) for the next occurrence!
  */
 public class AlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "AlarmReceiver";
@@ -21,14 +22,35 @@ public class AlarmReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         Log.d(TAG, "Native Alarm Triggered! Action: " + intent.getAction());
 
-        String title = intent.getStringExtra("TITLE");
-        String memo = intent.getStringExtra("MEMO");
+        // 0. Wake screen and CPU immediately
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) context.getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                android.os.PowerManager.WakeLock wl = pm.newWakeLock(
+                    android.os.PowerManager.FULL_WAKE_LOCK
+                    | android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP
+                    | android.os.PowerManager.ON_AFTER_RELEASE,
+                    "reminder:ReceiverWakeLock"
+                );
+                wl.acquire(10 * 1000L);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to acquire receiver wakelock", e);
+        }
 
-        // 1. ホーム画面やロック画面の上から、直接「緑の全面画面」を最前面にドカンと起動！
+        // 1. Direct launch full-screen AlarmActivity
         try {
             Intent fullScreenIntent = new Intent(context, AlarmActivity.class);
-            fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
-            fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
+            if (intent.getExtras() != null) {
+                fullScreenIntent.putExtras(intent.getExtras());
+            }
+            String title = intent.getStringExtra("TITLE");
+            String memo = intent.getStringExtra("MEMO");
+            String id = intent.getStringExtra("ID");
+            boolean isPreNotice = id != null && id.contains("_notice_");
+            fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title != null ? title : "リマインダー");
+            fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo != null ? memo : "");
+            fullScreenIntent.putExtra(AlarmActivity.EXTRA_IS_PRE_NOTICE, isPreNotice);
             fullScreenIntent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -36,12 +58,12 @@ public class AlarmReceiver extends BroadcastReceiver {
                 | Intent.FLAG_ACTIVITY_SINGLE_TOP
             );
             context.startActivity(fullScreenIntent);
-            Log.d(TAG, "Directly started AlarmActivity in full-screen over homescreen");
+            Log.d(TAG, "Directly launched AlarmActivity from AlarmReceiver!");
         } catch (Exception e) {
-            Log.e(TAG, "Failed to launch full-screen AlarmActivity directly", e);
+            Log.w(TAG, "Direct launch from AlarmReceiver caught exception", e);
         }
 
-        // 2. 音とバイブを鳴らすサービスをバックグラウンド起動
+        // 2. Start foreground alarm service to ring sound & vibrate
         Intent serviceIntent = new Intent(context, AlarmService.class);
         serviceIntent.setAction(AlarmService.ACTION_START_ALARM);
         if (intent.getExtras() != null) {
@@ -54,7 +76,7 @@ public class AlarmReceiver extends BroadcastReceiver {
             Log.e(TAG, "Failed to start AlarmService", e);
         }
 
-        // 3. リピート予定の次回自動再設定
+        // 3. Automatically reschedule next occurrence for repeating alarms (e.g. 毎日, 毎週)
         try {
             String id = intent.getStringExtra("ID");
             String repeat = intent.getStringExtra("REPEAT");
@@ -67,7 +89,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to reschedule next repeating alarm", e);
+            Log.e(TAG, "Failed to check or reschedule repeating alarm", e);
         }
     }
 
@@ -111,9 +133,7 @@ public class AlarmReceiver extends BroadcastReceiver {
 
             int requestCode = Math.abs(id.hashCode());
 
-            Intent showIntent = new Intent(context, AlarmActivity.class);
-            showIntent.putExtra(AlarmActivity.EXTRA_TITLE, originalIntent.getStringExtra("TITLE"));
-            showIntent.putExtra(AlarmActivity.EXTRA_MEMO, originalIntent.getStringExtra("MEMO"));
+            Intent showIntent = new Intent(context, MainActivity.class);
             showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent showPendingIntent = PendingIntent.getActivity(
                 context,
@@ -138,8 +158,9 @@ public class AlarmReceiver extends BroadcastReceiver {
 
             AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(nextTimestamp, showPendingIntent);
             alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
+            Log.d(TAG, "Successfully auto-rescheduled next repeating alarm for " + id + " at " + nextTimestamp);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to reschedule", e);
+            Log.e(TAG, "Failed to reschedule next repeating alarm", e);
         }
     }
 }
