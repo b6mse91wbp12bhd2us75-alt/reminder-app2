@@ -21,10 +21,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 /**
- * Fullscreen Native Activity launched as a full-screen intent when an alarm rings.
- * Works even when the screen is locked or the device is sleeping.
- * Designed with a calming pale/sage green aesthetic, dedicated top space for heads-up banner,
- * and a large wide STOP button.
+ * Fullscreen Native Activity launched as a full-screen window when an alarm rings.
+ * Works over lockscreen and dismisses keyguard directly.
  */
 public class AlarmActivity extends AppCompatActivity {
     public static final String EXTRA_ID = "ID";
@@ -76,11 +74,11 @@ public class AlarmActivity extends AppCompatActivity {
     }
 
     private View createFullScreenAlarmView(String title, String memo, boolean isPreNotice) {
-        int paddingHoriz = dpToPx(20);
-        int paddingTop = dpToPx(104); // 黒ベタ小窓用の最上部クリアランス（小窓が被っても重ならない）
-        int paddingBottom = dpToPx(24);
+        int paddingHoriz = dpToPx(24);
+        int paddingTop = dpToPx(36);
+        int paddingBottom = dpToPx(28);
 
-        // Root container: Soft sage/forest green gradient background
+        // Root container: Calm forest green gradient
         LinearLayout root = new LinearLayout(this);
         root.setLayoutParams(new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -90,14 +88,13 @@ public class AlarmActivity extends AppCompatActivity {
         root.setGravity(Gravity.CENTER_HORIZONTAL);
         root.setPadding(paddingHoriz, paddingTop, paddingHoriz, paddingBottom);
 
-        // Gradient background (#2e4a3e -> #243b32 -> #1a2c25)
         GradientDrawable backgroundGradient = new GradientDrawable(
             GradientDrawable.Orientation.TOP_BOTTOM,
             new int[]{Color.parseColor("#2e4a3e"), Color.parseColor("#243b32"), Color.parseColor("#1a2c25")}
         );
         root.setBackground(backgroundGradient);
 
-        // Top Header: "リマインダー通知" pill
+        // Top Header: "リマインダー通知" / "事前通知" pill
         LinearLayout headerPill = new LinearLayout(this);
         headerPill.setOrientation(LinearLayout.HORIZONTAL);
         headerPill.setGravity(Gravity.CENTER);
@@ -213,7 +210,7 @@ public class AlarmActivity extends AppCompatActivity {
         stopBtn.setTypeface(Typeface.DEFAULT_BOLD);
 
         GradientDrawable stopBg = new GradientDrawable();
-        stopBg.setColor(Color.parseColor("#059669")); // Emerald green
+        stopBg.setColor(Color.parseColor("#059669"));
         stopBg.setCornerRadius(dpToPx(18));
         stopBg.setStroke(dpToPx(2), Color.parseColor("#a7f3d0"));
         stopBtn.setBackground(stopBg);
@@ -232,7 +229,6 @@ public class AlarmActivity extends AppCompatActivity {
     }
 
     private void stopAlarmAndFinish() {
-        // Stop foreground alarm service
         Intent stopService = new Intent(this, AlarmService.class);
         stopService.setAction(AlarmService.ACTION_STOP_ALARM);
         startService(stopService);
