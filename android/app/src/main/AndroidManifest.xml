@@ -24,17 +24,19 @@
 
         </activity>
 
-        <!-- 全面表示専用アクティビティ（ホーム画面やロック画面の上に強制起動） -->
+        <!-- Fullscreen Native Alarm Activity -->
         <activity
             android:name=".AlarmActivity"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:showOnLockScreen="true"
+            android:inheritShowWhenLocked="true"
             android:excludeFromRecents="true"
-            android:theme="@style/AppTheme.NoActionBar"
+            android:theme="@style/AlarmActivityTheme"
             android:launchMode="singleInstance"
-            android:exported="false" />
+            android:exported="true" />
 
+        <!-- Native Alarm Receiver & Foreground Service -->
         <receiver
             android:name=".AlarmReceiver"
             android:enabled="true"
@@ -61,9 +63,9 @@
         </provider>
     </application>
 
-    <!-- 必須権限：ホーム画面や他のアプリの上に直接全画面を割り込み表示する権限 -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
