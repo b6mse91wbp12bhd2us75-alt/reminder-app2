@@ -19,7 +19,7 @@ import java.io.FileOutputStream;
 
 /**
  * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
- * Directly launches AlarmActivity fullscreen without intermediate heads-up banner.
+ * and native file saving for custom MP3 external audio files.
  */
 @CapacitorPlugin(name = "NativeAlarm")
 public class NativeAlarmPlugin extends Plugin {
@@ -65,9 +65,9 @@ public class NativeAlarmPlugin extends Plugin {
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         int requestCode = Math.abs(id.hashCode());
 
-        Intent alarmIntent = new Intent(context, AlarmActivity.class);
+        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
         alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
+        PendingIntent pendingIntent = PendingIntent.getBroadcast(
             context,
             requestCode,
             alarmIntent,
@@ -79,7 +79,6 @@ public class NativeAlarmPlugin extends Plugin {
             pendingIntent.cancel();
         }
 
-        // Delete associated audio file if exists
         try {
             File audioFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
             if (audioFile.exists()) {
@@ -168,6 +167,7 @@ public class NativeAlarmPlugin extends Plugin {
         String title = call.getString("title", "【テスト成功】大音量アラーム");
         String memo = call.getString("memo", "アプリを完全に閉じた状態での発火テストに成功しました！");
         String audioBase64 = call.getString("audioBase64");
+
         Integer volume = call.getInt("volume", 70);
 
         long targetTime = System.currentTimeMillis() + (delaySeconds * 1000L);
@@ -198,35 +198,39 @@ public class NativeAlarmPlugin extends Plugin {
 
         int requestCode = Math.abs(id.hashCode());
 
-        // Direct full-screen AlarmActivity intent launched by Android AlarmManager
-        Intent alarmActivityIntent = new Intent(context, AlarmActivity.class);
-        alarmActivityIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_ID, id);
-        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
-        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
-        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_TIME, timestamp);
-        alarmActivityIntent.putExtra(AlarmActivity.EXTRA_IS_PRE_NOTICE, id != null && id.contains("_notice_"));
-        alarmActivityIntent.putExtra("REPEAT", repeat);
-        alarmActivityIntent.putExtra("AUDIO_FILE", audioFilePath);
-        alarmActivityIntent.putExtra("DURATION", duration);
-        alarmActivityIntent.putExtra("VOLUME", volume);
-        alarmActivityIntent.setFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK
-            | Intent.FLAG_ACTIVITY_CLEAR_TOP
-            | Intent.FLAG_ACTIVITY_SINGLE_TOP
-        );
-
-        PendingIntent alarmActivityPendingIntent = PendingIntent.getActivity(
+        // 1. Show Intent (opens MainActivity if user taps system clock indicator)
+        Intent showIntent = new Intent(context, MainActivity.class);
+        showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent showPendingIntent = PendingIntent.getActivity(
             context,
             requestCode,
-            alarmActivityIntent,
+            showIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        // Schedule via setAlarmClock (Directly pops up AlarmActivity full-screen without heads-up banner)
-        AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, alarmActivityPendingIntent);
-        alarmManager.setAlarmClock(clockInfo, alarmActivityPendingIntent);
-        Log.d(TAG, "Scheduled native direct AlarmClock for ID: " + id + " at: " + timestamp);
+        // 2. Alarm Intent sent to AlarmReceiver when alarm fires (Guaranteed system wake broadcast)
+        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
+        alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+        alarmIntent.putExtra("ID", id);
+        alarmIntent.putExtra("TITLE", title);
+        alarmIntent.putExtra("MEMO", memo);
+        alarmIntent.putExtra("TIMESTAMP", timestamp);
+        alarmIntent.putExtra("REPEAT", repeat);
+        alarmIntent.putExtra("AUDIO_FILE", audioFilePath);
+        alarmIntent.putExtra("DURATION", duration);
+        alarmIntent.putExtra("VOLUME", volume);
+
+        PendingIntent alarmPendingIntent = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            alarmIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+        );
+
+        // Schedule via standard Android setAlarmClock
+        AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
+        alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
+        Log.d(TAG, "Scheduled native AlarmClock for ID: " + id + " at: " + timestamp);
 
         return audioFilePath;
     }
