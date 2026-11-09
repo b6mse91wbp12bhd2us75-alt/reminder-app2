@@ -29,10 +29,8 @@
             android:name=".AlarmActivity"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:showOnLockScreen="true"
-            android:inheritShowWhenLocked="true"
             android:excludeFromRecents="true"
-            android:theme="@style/AlarmActivityTheme"
+            android:theme="@style/AppTheme.NoActionBar"
             android:launchMode="singleInstance"
             android:exported="true" />
 
