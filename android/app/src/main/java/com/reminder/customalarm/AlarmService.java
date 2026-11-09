@@ -77,11 +77,14 @@ public class AlarmService extends Service {
     }
 
     private void startAlarmWithNotification(String title, String memo, String audioPath, int durationSec, int volume) {
-        // 1. Acquire WakeLock
+        // 1. Acquire Full WakeLock to illuminate screen
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
             if (pm != null) {
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP, "reminder:AlarmWakeLock");
+                wakeLock = pm.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE,
+                    "reminder:AlarmWakeLock"
+                );
                 wakeLock.acquire(10 * 60 * 1000L);
             }
         } catch (Exception e) {
