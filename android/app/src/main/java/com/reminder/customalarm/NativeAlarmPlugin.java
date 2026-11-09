@@ -19,7 +19,7 @@ import java.io.FileOutputStream;
 
 /**
  * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
- * and persistent internal storage file management for custom external MP3 audio.
+ * and native file saving for custom MP3 external audio files.
  */
 @CapacitorPlugin(name = "NativeAlarm")
 public class NativeAlarmPlugin extends Plugin {
@@ -118,6 +118,7 @@ public class NativeAlarmPlugin extends Plugin {
             pendingIntent.cancel();
         }
 
+        // Delete associated audio file if exists
         try {
             File audioFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
             if (audioFile.exists()) {
@@ -208,7 +209,6 @@ public class NativeAlarmPlugin extends Plugin {
         String audioBase64 = call.getString("audioBase64");
         Integer volume = call.getInt("volume", 70);
         String soundName = call.getString("soundName", "テスト音源");
-
         long targetTime = System.currentTimeMillis() + (delaySeconds * 1000L);
 
         try {
@@ -232,11 +232,11 @@ public class NativeAlarmPlugin extends Plugin {
         String audioFilePath = null;
         String safeName = sanitizeFileName(soundName);
 
-        // 1. If base64 provided, save it both for this alarm ID and as a permanent named sound file
+        // 1. Base64が渡された場合はファイル保存
         if (audioBase64 != null && !audioBase64.isEmpty()) {
             audioFilePath = saveBase64ToFile(context, id, safeName, audioBase64);
         } else if (!safeName.isEmpty()) {
-            // 2. Base64 omitted, but check if persistent sound file exists on disk
+            // 2. Base64が無い場合（更新後等）は内部ストレージの既存ファイルを検出
             File namedFile = new File(context.getFilesDir(), "custom_audio_" + safeName + ".mp3");
             if (namedFile.exists() && namedFile.length() > 0) {
                 audioFilePath = namedFile.getAbsolutePath();
@@ -246,7 +246,6 @@ public class NativeAlarmPlugin extends Plugin {
 
         int requestCode = Math.abs(id.hashCode());
 
-        // 1. Show Intent
         Intent showIntent = new Intent(context, MainActivity.class);
         showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(
@@ -256,7 +255,6 @@ public class NativeAlarmPlugin extends Plugin {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        // 2. Alarm Intent sent to AlarmReceiver
         Intent alarmIntent = new Intent(context, AlarmReceiver.class);
         alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
         alarmIntent.putExtra("ID", id);
@@ -294,14 +292,12 @@ public class NativeAlarmPlugin extends Plugin {
             byte[] decodedBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
             File audioDir = context.getFilesDir();
 
-            // Save alarm-specific file
             File idFile = new File(audioDir, "custom_alarm_" + id + ".mp3");
             FileOutputStream fosId = new FileOutputStream(idFile);
             fosId.write(decodedBytes);
             fosId.flush();
             fosId.close();
 
-            // If soundName is provided, also save persistent named file that survives updates
             if (safeName != null && !safeName.isEmpty()) {
                 File namedFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
                 FileOutputStream fosNamed = new FileOutputStream(namedFile);
