@@ -25,13 +25,12 @@ import java.io.File;
 
 /**
  * Native Android Foreground Service for loud alarm audio playback and vibration.
- * Uses a completely silent LOW-importance notification channel to ensure NO black heads-up banners appear.
+ * Automatically looks up persistent named audio files from disk.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
     public static final String ACTION_START_ALARM = "com.reminder.customalarm.ACTION_START_ALARM";
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
-    // 過去のキャッシュを完全破棄する新チャンネルID
     public static final String CHANNEL_ID = "reminder_silent_service_v4";
     private static final int NOTIFICATION_ID = 987654;
 
@@ -65,18 +64,19 @@ public class AlarmService extends Service {
             String memo = intent.getStringExtra("MEMO");
             if (memo == null) memo = "予定の時刻になりました。確認してください。";
             String audioPath = intent.getStringExtra("AUDIO_FILE");
+            String soundName = intent.getStringExtra("SOUND_NAME");
             int durationSec = intent.getIntExtra("DURATION", 15);
             if (durationSec <= 0) durationSec = 60;
             int volume = intent.getIntExtra("VOLUME", 70);
 
-            startAlarmWithNotification(title, memo, audioPath, durationSec, volume);
+            startAlarmWithNotification(title, memo, audioPath, soundName, durationSec, volume);
             return START_STICKY;
         }
 
         return START_NOT_STICKY;
     }
 
-    private void startAlarmWithNotification(String title, String memo, String audioPath, int durationSec, int volume) {
+    private void startAlarmWithNotification(String title, String memo, String audioPath, String soundName, int durationSec, int volume) {
         // 1. Acquire Full WakeLock to illuminate screen
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -105,7 +105,7 @@ public class AlarmService extends Service {
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 3. バックグラウンド常駐のためのサイレント通知（黒い小窓バナーは絶対に出さない）
+        // 3. Silent foreground notification (NO heads-up black box)
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle(title)
@@ -133,8 +133,8 @@ public class AlarmService extends Service {
             Log.w(TAG, "Direct startActivity for AlarmActivity caught exception", e);
         }
 
-        // 5. Play Audio on USAGE_ALARM stream
-        playAudio(audioPath, volume);
+        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream
+        playAudio(audioPath, soundName, volume);
 
         // 6. Vibrate
         try {
@@ -155,7 +155,7 @@ public class AlarmService extends Service {
         }, durationSec * 1000L);
     }
 
-    private void playAudio(String audioPath, int volume) {
+    private void playAudio(String audioPath, String soundName, int volume) {
         try {
             if (mediaPlayer != null) {
                 mediaPlayer.release();
@@ -178,14 +178,28 @@ public class AlarmService extends Service {
 
             boolean audioSet = false;
 
+            // 1. Check if custom audio file exists via audioPath
             if (audioPath != null && !audioPath.isEmpty()) {
                 File customFile = new File(audioPath);
                 if (customFile.exists() && customFile.length() > 0) {
                     mediaPlayer.setDataSource(customFile.getAbsolutePath());
                     audioSet = true;
+                    Log.d(TAG, "Playing custom external audio from file: " + customFile.getAbsolutePath());
                 }
             }
 
+            // 2. Check if permanent named audio file exists in internal storage
+            if (!audioSet && soundName != null && !soundName.isEmpty()) {
+                String safeName = soundName.replaceAll("[^a-zA-Z0-9._-]", "_");
+                File namedFile = new File(getFilesDir(), "custom_audio_" + safeName + ".mp3");
+                if (namedFile.exists() && namedFile.length() > 0) {
+                    mediaPlayer.setDataSource(namedFile.getAbsolutePath());
+                    audioSet = true;
+                    Log.d(TAG, "Playing permanent audio by soundName: " + namedFile.getAbsolutePath());
+                }
+            }
+
+            // Fallback to raw/alarm_ring.wav
             if (!audioSet) {
                 try {
                     int rawResId = getResources().getIdentifier("alarm_ring", "raw", getPackageName());
@@ -195,6 +209,7 @@ public class AlarmService extends Service {
                             mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
                             afd.close();
                             audioSet = true;
+                            Log.d(TAG, "Playing bundled raw/alarm_ring.wav");
                         }
                     }
                 } catch (Exception e) {
@@ -202,12 +217,14 @@ public class AlarmService extends Service {
                 }
             }
 
+            // Fallback to default system alarm ringtone
             if (!audioSet) {
                 Uri defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
                 if (defaultAlarmUri == null) {
                     defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
                 }
                 mediaPlayer.setDataSource(this, defaultAlarmUri);
+                Log.d(TAG, "Playing system default alarm ringtone");
             }
 
             mediaPlayer.setLooping(true);
@@ -267,7 +284,6 @@ public class AlarmService extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
-                // 過去の古いキャッシュチャンネルを完全削除
                 try {
                     manager.deleteNotificationChannel("reminder_native_alarm_channel_v1");
                     manager.deleteNotificationChannel("reminder_native_alarm_channel_v2");
@@ -275,7 +291,6 @@ public class AlarmService extends Service {
                     manager.deleteNotificationChannel("reminder_channel");
                 } catch (Exception ignored) {}
 
-                // 新チャンネル作成（黒い小窓を出さないサイレントLOW優先度）
                 NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
                     "リマインダーバックグラウンド再生",
