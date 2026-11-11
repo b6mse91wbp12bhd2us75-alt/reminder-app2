@@ -120,21 +120,36 @@ public class NativeAlarmPlugin extends Plugin {
         AlarmManager alarmManager = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         int requestCode = Math.abs(id.hashCode());
 
-        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
-        alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        PendingIntent pendingIntent = PendingIntent.getBroadcast(
+        Intent alarmActivityIntent = new Intent(context, AlarmActivity.class);
+        alarmActivityIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+        PendingIntent piActivity = PendingIntent.getActivity(
             context,
             requestCode,
-            alarmIntent,
+            alarmActivityIntent,
             PendingIntent.FLAG_NO_CREATE | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        if (alarmManager != null && pendingIntent != null) {
-            alarmManager.cancel(pendingIntent);
-            pendingIntent.cancel();
+        Intent alarmBroadcastIntent = new Intent(context, AlarmReceiver.class);
+        alarmBroadcastIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+        PendingIntent piBroadcast = PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            alarmBroadcastIntent,
+            PendingIntent.FLAG_NO_CREATE | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+        );
+
+        if (alarmManager != null) {
+            if (piActivity != null) {
+                alarmManager.cancel(piActivity);
+                piActivity.cancel();
+            }
+            if (piBroadcast != null) {
+                alarmManager.cancel(piBroadcast);
+                piBroadcast.cancel();
+            }
         }
 
-        // 注意: リピート予定や再設定時の音源消失を防ぐため、custom_alarm_<id>.mp3 は安易に削除しません
+        // 注意: リピート予定や再設定時の音源消失を防ぐため、custom_alarm_<id>.mp3 は削除しません
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);
@@ -275,28 +290,35 @@ public class NativeAlarmPlugin extends Plugin {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        Intent alarmIntent = new Intent(context, AlarmReceiver.class);
-        alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
-        alarmIntent.putExtra("ID", id);
-        alarmIntent.putExtra("TITLE", title);
-        alarmIntent.putExtra("MEMO", memo);
-        alarmIntent.putExtra("TIMESTAMP", timestamp);
-        alarmIntent.putExtra("REPEAT", repeat);
-        alarmIntent.putExtra("SOUND_NAME", soundName);
-        alarmIntent.putExtra("AUDIO_FILE", audioFilePath);
-        alarmIntent.putExtra("DURATION", duration);
-        alarmIntent.putExtra("VOLUME", volume);
+        // AlarmActivity を直接起動する PendingIntent.getActivity を作成
+        Intent alarmActivityIntent = new Intent(context, AlarmActivity.class);
+        alarmActivityIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+        alarmActivityIntent.putExtra("ID", id);
+        alarmActivityIntent.putExtra("TITLE", title);
+        alarmActivityIntent.putExtra("MEMO", memo);
+        alarmActivityIntent.putExtra("TIMESTAMP", timestamp);
+        alarmActivityIntent.putExtra("REPEAT", repeat);
+        alarmActivityIntent.putExtra("SOUND_NAME", soundName);
+        alarmActivityIntent.putExtra("AUDIO_FILE", audioFilePath);
+        alarmActivityIntent.putExtra("DURATION", duration);
+        alarmActivityIntent.putExtra("VOLUME", volume);
+        alarmActivityIntent.addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK
+            | Intent.FLAG_ACTIVITY_CLEAR_TOP
+            | Intent.FLAG_ACTIVITY_SINGLE_TOP
+        );
 
-        PendingIntent alarmPendingIntent = PendingIntent.getBroadcast(
+        PendingIntent alarmPendingIntent = PendingIntent.getActivity(
             context,
             requestCode,
-            alarmIntent,
+            alarmActivityIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
+        // setAlarmClock によりOS自身が全画面Activityを起動（重ねて表示権限は完全に不要）
         AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
         alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-        Log.d(TAG, "Scheduled native AlarmClock for ID: " + id + " at: " + timestamp + " with audio: " + audioFilePath);
+        Log.d(TAG, "Scheduled direct native AlarmClock Activity for ID: " + id + " at: " + timestamp + " with audio: " + audioFilePath);
 
         return audioFilePath;
     }
