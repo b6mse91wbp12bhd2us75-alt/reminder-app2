@@ -10,7 +10,6 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.content.res.AssetFileDescriptor;
 import android.media.AudioAttributes;
-import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -25,15 +24,17 @@ import androidx.core.app.NotificationCompat;
 import java.io.File;
 
 /**
- * Native Android Foreground Service that plays loud alarm audio and vibrates.
- * Runs independently of the JavaScript / WebView environment.
+ * Native Android Foreground Service that handles full-screen intent launch,
+ * plays loud custom alarm audio (with multi-step fallback for repeats), and vibrates.
+ * Works out-of-the-box ("ポン付け") without requiring "他のアプリの上に重ねて表示" permission.
  */
 public class AlarmService extends Service {
     private static final String TAG = "AlarmService";
     public static final String ACTION_START_ALARM = "com.reminder.customalarm.ACTION_START_ALARM";
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
-    // 古いキャッシュを完全に破棄するため新しいチャンネルIDに変更
-    public static final String CHANNEL_ID = "reminder_silent_service_v4";
+
+    // 新チャンネルID（全画面インテント有効化・過去キャッシュ破棄）
+    public static final String CHANNEL_ID = "reminder_fullscreen_alarm_channel_v5";
     private static final int NOTIFICATION_ID = 987654;
 
     private MediaPlayer mediaPlayer;
@@ -67,18 +68,19 @@ public class AlarmService extends Service {
             if (memo == null) memo = "予定の時刻になりました。確認してください。";
             String audioPath = intent.getStringExtra("AUDIO_FILE");
             String soundName = intent.getStringExtra("SOUND_NAME");
+            String id = intent.getStringExtra("ID");
             int durationSec = intent.getIntExtra("DURATION", 15);
             if (durationSec <= 0) durationSec = 60;
             int volume = intent.getIntExtra("VOLUME", 70);
 
-            startAlarmWithNotification(title, memo, audioPath, soundName, durationSec, volume);
+            startAlarmWithNotification(title, memo, audioPath, soundName, id, durationSec, volume);
             return START_STICKY;
         }
 
         return START_NOT_STICKY;
     }
 
-    private void startAlarmWithNotification(String title, String memo, String audioPath, String soundName, int durationSec, int volume) {
+    private void startAlarmWithNotification(String title, String memo, String audioPath, String soundName, String id, int durationSec, int volume) {
         // 1. Acquire Full WakeLock to illuminate screen
         try {
             PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
@@ -103,7 +105,7 @@ public class AlarmService extends Service {
             PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
         );
 
-        // 3. Build FullScreen Intent to launch AlarmActivity over lockscreen/homescreen
+        // 3. Build FullScreen Intent to launch AlarmActivity
         Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
@@ -117,16 +119,18 @@ public class AlarmService extends Service {
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // サイレント常駐通知（黒い小窓ヘッドアップは一切出さない）
+        // 4. Android標準のFullScreenIntent通知:
+        // ロック時・画面OFF時にAndroidシステム（Keyguard）が直接全画面Activityを前面起動します。
+        // これにより「他のアプリの上に重ねて表示」権限を手動許可する必要がなくなります。
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
             .setContentTitle(title)
-            .setContentText("アラーム作動中")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setContentText(memo != null && !memo.isEmpty() ? memo : "予定の時刻です")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
-            .setSilent(true)
             .setOngoing(true)
             .setAutoCancel(false);
 
@@ -138,15 +142,15 @@ public class AlarmService extends Service {
             startForeground(NOTIFICATION_ID, notification);
         }
 
-        // 画面点灯状態時の直接起動
+        // 画面点灯時（ユーザー操作中）のための直接起動
         try {
             startActivity(fullScreenIntent);
         } catch (Exception e) {
-            Log.w(TAG, "Direct startActivity failed", e);
+            Log.w(TAG, "Direct startActivity deferred to setFullScreenIntent", e);
         }
 
-        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream with user volume
-        playAudio(audioPath, soundName, volume);
+        // 5. Play Audio using MediaPlayer on USAGE_ALARM stream
+        playAudio(audioPath, soundName, id, volume);
 
         // 6. Vibrate
         try {
@@ -167,7 +171,7 @@ public class AlarmService extends Service {
         }, durationSec * 1000L);
     }
 
-    private void playAudio(String audioPath, String soundName, int volume) {
+    private void playAudio(String audioPath, String soundName, String id, int volume) {
         try {
             if (mediaPlayer != null) {
                 mediaPlayer.release();
@@ -191,20 +195,40 @@ public class AlarmService extends Service {
 
             boolean audioSet = false;
 
-            // 1. 指定ファイルパスの確認
+            // 1. 指定ファイルパスの確認（custom_alarm_<id>.mp3など）
             if (audioPath != null && !audioPath.isEmpty()) {
                 File customFile = new File(audioPath);
                 if (customFile.exists() && customFile.length() > 0) {
                     mediaPlayer.setDataSource(customFile.getAbsolutePath());
                     audioSet = true;
-                    Log.d(TAG, "Playing custom external audio from: " + customFile.getAbsolutePath());
+                    Log.d(TAG, "Playing custom external audio from audioPath: " + customFile.getAbsolutePath());
                 }
             }
 
-            // 2. 内部ストレージに永続保存されたMP3の確認
+            // 2. リピート時：IDによる内部ストレージ検索（custom_alarm_<id>.mp3）
+            if (!audioSet && id != null && !id.isEmpty()) {
+                String baseId = id.contains("_notice_") ? id.substring(0, id.indexOf("_notice_")) : id;
+                File idFile = new File(getFilesDir(), "custom_alarm_" + id + ".mp3");
+                if (!idFile.exists() || idFile.length() == 0) {
+                    idFile = new File(getFilesDir(), "custom_alarm_" + baseId + ".mp3");
+                }
+                if (idFile.exists() && idFile.length() > 0) {
+                    mediaPlayer.setDataSource(idFile.getAbsolutePath());
+                    audioSet = true;
+                    Log.d(TAG, "Playing custom audio by ID file: " + idFile.getAbsolutePath());
+                }
+            }
+
+            // 3. 音源名による内部ストレージ検索（日本語名・サニタイズ名・ハッシュ名）
             if (!audioSet && soundName != null && !soundName.isEmpty()) {
-                String safeName = soundName.replaceAll("[^a-zA-Z0-9._-]", "_");
-                File namedFile = new File(getFilesDir(), "custom_audio_" + safeName + ".mp3");
+                File namedFile = new File(getFilesDir(), "custom_audio_" + soundName + ".mp3");
+                if (!namedFile.exists() || namedFile.length() == 0) {
+                    String safeName = soundName.replaceAll("[^a-zA-Z0-9._-]", "_");
+                    namedFile = new File(getFilesDir(), "custom_audio_" + safeName + ".mp3");
+                }
+                if (!namedFile.exists() || namedFile.length() == 0) {
+                    namedFile = new File(getFilesDir(), "custom_sound_" + Math.abs(soundName.hashCode()) + ".mp3");
+                }
                 if (namedFile.exists() && namedFile.length() > 0) {
                     mediaPlayer.setDataSource(namedFile.getAbsolutePath());
                     audioSet = true;
@@ -212,7 +236,23 @@ public class AlarmService extends Service {
                 }
             }
 
-            // Fallback: raw/alarm_ring.wav
+            // 4. 外部音源設定時にファイルが見つからない場合のフォールバック（端末内に保存されている最新の外部MP3を自動再生）
+            if (!audioSet && soundName != null && !soundName.isEmpty() && !soundName.equals("デフォルト") && !soundName.equals("alarm_ring") && !soundName.startsWith("電子音") && !soundName.startsWith("チャイム") && !soundName.startsWith("小鳥")) {
+                File dir = getFilesDir();
+                File[] files = dir.listFiles((d, name) -> (name.startsWith("custom_") || name.endsWith(".mp3")) && !name.equals("alarm_ring.wav"));
+                if (files != null && files.length > 0) {
+                    for (File f : files) {
+                        if (f.length() > 0) {
+                            mediaPlayer.setDataSource(f.getAbsolutePath());
+                            audioSet = true;
+                            Log.d(TAG, "Playing available custom MP3 fallback: " + f.getAbsolutePath());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 5. 内蔵 raw/alarm_ring.wav
             if (!audioSet) {
                 try {
                     int rawResId = getResources().getIdentifier("alarm_ring", "raw", getPackageName());
@@ -227,7 +267,7 @@ public class AlarmService extends Service {
                 } catch (Exception ignored) {}
             }
 
-            // Fallback: system alarm ringtone
+            // 6. システム標準アラーム音
             if (!audioSet) {
                 Uri defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
                 if (defaultAlarmUri == null) {
@@ -297,19 +337,20 @@ public class AlarmService extends Service {
                     manager.deleteNotificationChannel("reminder_native_alarm_channel_v1");
                     manager.deleteNotificationChannel("reminder_native_alarm_channel_v2");
                     manager.deleteNotificationChannel("reminder_fullscreen_alarm_channel_v3");
+                    manager.deleteNotificationChannel("reminder_silent_service_v4");
                     manager.deleteNotificationChannel("reminder_channel");
                 } catch (Exception ignored) {}
 
                 NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
-                    "リマインダーバックグラウンド再生",
-                    NotificationManager.IMPORTANCE_LOW
+                    "リマインダー全画面アラーム",
+                    NotificationManager.IMPORTANCE_HIGH
                 );
-                channel.setDescription("全面表示中のバックグラウンド音声再生用");
-                channel.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
-                channel.enableVibration(false);
-                channel.setShowBadge(false);
+                channel.setDescription("全画面アラーム通知");
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                channel.setBypassDnd(true);
                 channel.setSound(null, null);
+                channel.enableVibration(false);
 
                 manager.createNotificationChannel(channel);
             }
