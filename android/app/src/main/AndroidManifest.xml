@@ -32,7 +32,12 @@
             android:excludeFromRecents="true"
             android:theme="@style/AppTheme.NoActionBar"
             android:launchMode="singleInstance"
-            android:exported="true" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
 
         <!-- Native Alarm Receiver & Foreground Service -->
         <receiver
