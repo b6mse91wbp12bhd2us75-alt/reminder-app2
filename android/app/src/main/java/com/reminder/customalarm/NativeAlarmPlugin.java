@@ -67,7 +67,6 @@ public class NativeAlarmPlugin extends Plugin {
             Context context = getContext();
             String safeName = sanitizeFileName(name);
             File audioDir = context.getFilesDir();
-            File destFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
 
             String cleanBase64 = audioBase64;
             int commaIndex = cleanBase64.indexOf(",");
@@ -76,15 +75,32 @@ public class NativeAlarmPlugin extends Plugin {
             }
 
             byte[] decodedBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
-            FileOutputStream fos = new FileOutputStream(destFile);
-            fos.write(decodedBytes);
-            fos.flush();
-            fos.close();
 
-            Log.d(TAG, "Permanently saved custom audio file: " + destFile.getAbsolutePath());
+            // 1. safeNameで保存
+            File destSafe = new File(audioDir, "custom_audio_" + safeName + ".mp3");
+            FileOutputStream fos1 = new FileOutputStream(destSafe);
+            fos1.write(decodedBytes);
+            fos1.flush();
+            fos1.close();
+
+            // 2. 原音源名で保存
+            File destRaw = new File(audioDir, "custom_audio_" + name + ".mp3");
+            FileOutputStream fos2 = new FileOutputStream(destRaw);
+            fos2.write(decodedBytes);
+            fos2.flush();
+            fos2.close();
+
+            // 3. ハッシュ名で保存
+            File destHash = new File(audioDir, "custom_sound_" + Math.abs(name.hashCode()) + ".mp3");
+            FileOutputStream fos3 = new FileOutputStream(destHash);
+            fos3.write(decodedBytes);
+            fos3.flush();
+            fos3.close();
+
+            Log.d(TAG, "Permanently saved custom audio file: " + destSafe.getAbsolutePath());
             JSObject ret = new JSObject();
             ret.put("success", true);
-            ret.put("filePath", destFile.getAbsolutePath());
+            ret.put("filePath", destSafe.getAbsolutePath());
             call.resolve(ret);
         } catch (Exception e) {
             Log.e(TAG, "Failed to permanently save audio file", e);
@@ -118,14 +134,7 @@ public class NativeAlarmPlugin extends Plugin {
             pendingIntent.cancel();
         }
 
-        // Delete associated audio file if exists
-        try {
-            File audioFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
-            if (audioFile.exists()) {
-                audioFile.delete();
-            }
-        } catch (Exception ignored) {}
-
+        // 注意: リピート予定や再設定時の音源消失を防ぐため、custom_alarm_<id>.mp3 は安易に削除しません
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);
@@ -232,15 +241,26 @@ public class NativeAlarmPlugin extends Plugin {
         String audioFilePath = null;
         String safeName = sanitizeFileName(soundName);
 
-        // 1. Base64が渡された場合はファイル保存
+        // 1. Base64データが渡された場合はファイル保存
         if (audioBase64 != null && !audioBase64.isEmpty()) {
-            audioFilePath = saveBase64ToFile(context, id, safeName, audioBase64);
-        } else if (!safeName.isEmpty()) {
-            // 2. Base64が無い場合（更新後等）は内部ストレージの既存ファイルを検出
-            File namedFile = new File(context.getFilesDir(), "custom_audio_" + safeName + ".mp3");
-            if (namedFile.exists() && namedFile.length() > 0) {
-                audioFilePath = namedFile.getAbsolutePath();
-                Log.d(TAG, "Using existing persistent audio file for " + soundName + ": " + audioFilePath);
+            audioFilePath = saveBase64ToFile(context, id, safeName, soundName, audioBase64);
+        } else {
+            // 2. Base64が無い場合（リピートや再読み込み後など）は、すでに端末内に保存されているファイルを探索
+            File idFile = new File(context.getFilesDir(), "custom_alarm_" + id + ".mp3");
+            if (idFile.exists() && idFile.length() > 0) {
+                audioFilePath = idFile.getAbsolutePath();
+            } else if (soundName != null && !soundName.isEmpty()) {
+                File namedFile = new File(context.getFilesDir(), "custom_audio_" + soundName + ".mp3");
+                if (!namedFile.exists() || namedFile.length() == 0) {
+                    namedFile = new File(context.getFilesDir(), "custom_audio_" + safeName + ".mp3");
+                }
+                if (!namedFile.exists() || namedFile.length() == 0) {
+                    namedFile = new File(context.getFilesDir(), "custom_sound_" + Math.abs(soundName.hashCode()) + ".mp3");
+                }
+                if (namedFile.exists() && namedFile.length() > 0) {
+                    audioFilePath = namedFile.getAbsolutePath();
+                    Log.d(TAG, "Reusing existing persistent audio file for " + soundName + ": " + audioFilePath);
+                }
             }
         }
 
@@ -281,7 +301,7 @@ public class NativeAlarmPlugin extends Plugin {
         return audioFilePath;
     }
 
-    private String saveBase64ToFile(Context context, String id, String safeName, String base64Data) {
+    private String saveBase64ToFile(Context context, String id, String safeName, String soundName, String base64Data) {
         try {
             String cleanBase64 = base64Data;
             int commaIndex = cleanBase64.indexOf(",");
@@ -292,19 +312,34 @@ public class NativeAlarmPlugin extends Plugin {
             byte[] decodedBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
             File audioDir = context.getFilesDir();
 
+            // 1. 予定ID固有のファイル（リピート時も維持）
             File idFile = new File(audioDir, "custom_alarm_" + id + ".mp3");
             FileOutputStream fosId = new FileOutputStream(idFile);
             fosId.write(decodedBytes);
             fosId.flush();
             fosId.close();
 
+            // 2. 音源名ごとの永続ファイル
+            if (soundName != null && !soundName.isEmpty()) {
+                File rawNamedFile = new File(audioDir, "custom_audio_" + soundName + ".mp3");
+                FileOutputStream fosRaw = new FileOutputStream(rawNamedFile);
+                fosRaw.write(decodedBytes);
+                fosRaw.flush();
+                fosRaw.close();
+
+                File hashFile = new File(audioDir, "custom_sound_" + Math.abs(soundName.hashCode()) + ".mp3");
+                FileOutputStream fosHash = new FileOutputStream(hashFile);
+                fosHash.write(decodedBytes);
+                fosHash.flush();
+                fosHash.close();
+            }
+
             if (safeName != null && !safeName.isEmpty()) {
-                File namedFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
-                FileOutputStream fosNamed = new FileOutputStream(namedFile);
-                fosNamed.write(decodedBytes);
-                fosNamed.flush();
-                fosNamed.close();
-                Log.d(TAG, "Saved permanent named audio: " + namedFile.getAbsolutePath());
+                File safeNamedFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
+                FileOutputStream fosSafe = new FileOutputStream(safeNamedFile);
+                fosSafe.write(decodedBytes);
+                fosSafe.flush();
+                fosSafe.close();
             }
 
             Log.d(TAG, "Saved custom audio file to: " + idFile.getAbsolutePath());
