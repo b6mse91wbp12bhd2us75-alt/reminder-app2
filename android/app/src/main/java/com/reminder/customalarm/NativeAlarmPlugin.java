@@ -401,7 +401,7 @@ public class NativeAlarmPlugin extends Plugin {
 
             if (safeName != null && !safeName.isEmpty()) {
                 File safeNamedFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
-                FileOutputStream fosSafe = new File(safeNamedFile);
+                FileOutputStream fosSafe = new FileOutputStream(safeNamedFile);
                 fosSafe.write(decodedBytes);
                 fosSafe.flush();
                 fosSafe.close();
