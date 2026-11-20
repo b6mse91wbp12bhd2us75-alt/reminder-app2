@@ -88,7 +88,7 @@ public class NativeAlarmPlugin extends Plugin {
 
             // 2. Save with raw name
             File destRaw = new File(audioDir, "custom_audio_" + name + ".mp3");
-            FileOutputStream fos2 = new File(destRaw);
+            FileOutputStream fos2 = new FileOutputStream(destRaw);
             fos2.write(decodedBytes);
             fos2.flush();
             fos2.close();
@@ -401,7 +401,7 @@ public class NativeAlarmPlugin extends Plugin {
 
             if (safeName != null && !safeName.isEmpty()) {
                 File safeNamedFile = new File(audioDir, "custom_audio_" + safeName + ".mp3");
-                FileOutputStream fosSafe = new FileOutputStream(safeNamedFile);
+                FileOutputStream fosSafe = new File(safeNamedFile);
                 fosSafe.write(decodedBytes);
                 fosSafe.flush();
                 fosSafe.close();
