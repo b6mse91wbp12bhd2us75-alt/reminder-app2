@@ -1,26 +1,35 @@
 package com.reminder.customalarm;
 
+import android.app.ActivityOptions;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Bundle;
 import android.util.Log;
 import androidx.core.content.ContextCompat;
+import java.lang.reflect.Method;
 import java.util.Calendar;
 
 /**
- * Native BroadcastReceiver triggered by Android AlarmManager.setAlarmClock.
- * Wakes device even when app is swiped away or screen is OFF.
- * Also automatically reschedules repeating alarms (毎日, 毎週, etc.) for the next occurrence!
+ * Legacy/Fallback Native BroadcastReceiver.
+ * Primary scheduling launches AlarmActivity directly via AlarmManager.setAlarmClock().
  */
 public class AlarmReceiver extends BroadcastReceiver {
     private static final String TAG = "AlarmReceiver";
 
     @Override
     public void onReceive(Context context, Intent intent) {
-        Log.d(TAG, "Native Alarm Triggered! Action: " + intent.getAction());
+        if (intent == null) return;
+        String action = intent.getAction();
+        Log.d(TAG, "AlarmReceiver triggered! Action: " + action);
+
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
+            Log.d(TAG, "Device rebooted; ignoring BOOT_COMPLETED phantom alarm trigger.");
+            return;
+        }
 
         // 0. Wake screen and CPU immediately
         try {
@@ -38,7 +47,7 @@ public class AlarmReceiver extends BroadcastReceiver {
             Log.w(TAG, "Failed to acquire receiver wakelock", e);
         }
 
-        // 1. Direct launch full-screen AlarmActivity
+        // 1. Direct launch full-screen AlarmActivity with BAL options
         try {
             Intent fullScreenIntent = new Intent(context, AlarmActivity.class);
             if (intent.getExtras() != null) {
@@ -54,10 +63,14 @@ public class AlarmReceiver extends BroadcastReceiver {
             fullScreenIntent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 | Intent.FLAG_ACTIVITY_SINGLE_TOP
             );
-            context.startActivity(fullScreenIntent);
+            Bundle balBundle = createBackgroundAllowedOptionsBundle();
+            if (balBundle != null) {
+                context.startActivity(fullScreenIntent, balBundle);
+            } else {
+                context.startActivity(fullScreenIntent);
+            }
             Log.d(TAG, "Directly launched AlarmActivity from AlarmReceiver!");
         } catch (Exception e) {
             Log.w(TAG, "Direct launch from AlarmReceiver caught exception", e);
@@ -108,7 +121,7 @@ public class AlarmReceiver extends BroadcastReceiver {
                 cal.add(Calendar.MONTH, 1);
             } else if ("毎年".equals(repeat)) {
                 cal.add(Calendar.YEAR, 1);
-            } else if (repeat.contains("日おき")) {
+            } else if (repeat != null && repeat.contains("日おき")) {
                 try {
                     int days = Integer.parseInt(repeat.replace("日おき", "").trim());
                     cal.add(Calendar.DAY_OF_YEAR, days > 0 ? days : 2);
@@ -132,28 +145,38 @@ public class AlarmReceiver extends BroadcastReceiver {
             if (alarmManager == null) return;
 
             int requestCode = Math.abs(id.hashCode());
+            int showRequestCode = (requestCode + 100000) & 0x7FFFFFFF;
+            int immutableFlag = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+            Bundle balBundle = createBackgroundAllowedOptionsBundle();
 
             Intent showIntent = new Intent(context, MainActivity.class);
             showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent showPendingIntent = PendingIntent.getActivity(
                 context,
-                requestCode,
+                showRequestCode,
                 showIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+                balBundle
             );
 
-            Intent alarmIntent = new Intent(context, AlarmReceiver.class);
+            Intent alarmIntent = new Intent(context, AlarmActivity.class);
             alarmIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
             if (originalIntent.getExtras() != null) {
                 alarmIntent.putExtras(originalIntent.getExtras());
             }
             alarmIntent.putExtra("TIMESTAMP", nextTimestamp);
+            alarmIntent.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                | Intent.FLAG_ACTIVITY_SINGLE_TOP
+            );
 
-            PendingIntent alarmPendingIntent = PendingIntent.getBroadcast(
+            PendingIntent alarmPendingIntent = PendingIntent.getActivity(
                 context,
                 requestCode,
                 alarmIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+                balBundle
             );
 
             AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(nextTimestamp, showPendingIntent);
@@ -162,5 +185,24 @@ public class AlarmReceiver extends BroadcastReceiver {
         } catch (Exception e) {
             Log.e(TAG, "Failed to reschedule next repeating alarm", e);
         }
+    }
+
+    private Bundle createBackgroundAllowedOptionsBundle() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            );
+            if (Build.VERSION.SDK_INT >= 35) {
+                try {
+                    Method creatorMethod = ActivityOptions.class.getMethod(
+                        "setPendingIntentCreatorBackgroundActivityStartMode", int.class
+                    );
+                    creatorMethod.invoke(options, ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                } catch (Exception ignored) {}
+            }
+            return options.toBundle();
+        }
+        return null;
     }
 }
