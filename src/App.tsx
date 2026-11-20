@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { ReminderItem, TriggeredAlarm } from './types/reminder';
 import { Header } from './components/Header';
 import { ReminderCard } from './components/ReminderCard';
@@ -25,6 +26,9 @@ import {
   syncAllNativeReminders,
   stopNativeAlarm,
   openAndroidCalendarEvent,
+  checkOverlayPermission,
+  requestOverlayPermission,
+  saveNativeAudioFile,
 } from './services/nativeAlarm';
 import {
   getAllCustomSounds,
@@ -61,6 +65,12 @@ export default function App() {
     isOpen: boolean;
     title: string;
     message: string;
+    confirmLabel?: string;
+    requireTwoStep?: boolean;
+    stepOneConfirmLabel?: string;
+    stepTwoTitle?: string;
+    stepTwoMessage?: string;
+    stepTwoCheckboxLabel?: string;
     onConfirm: () => void;
   }>({
     isOpen: false,
@@ -81,82 +91,133 @@ export default function App() {
   // Smartphone frame mockup toggle for desktop
   const [isFramed, setIsFramed] = useState(true);
 
+  // Overlay permission state (他のアプリの上に重ねて表示)
+  const [hasOverlayPermission, setHasOverlayPermission] = useState<boolean>(true);
+
+  const verifyOverlayPermission = async () => {
+    const granted = await checkOverlayPermission();
+    setHasOverlayPermission(granted);
+  };
+
+  useEffect(() => {
+    verifyOverlayPermission();
+    const handleFocus = () => {
+      verifyOverlayPermission();
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
+
   // 1. Initial Load from LocalStorage & IndexedDB
   useEffect(() => {
-    // Load custom sounds from IndexedDB
-    getAllCustomSounds().then((sounds) => {
-      if (sounds && sounds.length > 0) {
-        setCustomSounds(sounds);
-      }
-    });
-
-    const savedReminders = localStorage.getItem(STORAGE_REMINDERS_KEY);
-    const savedCompleted = localStorage.getItem(STORAGE_COMPLETED_KEY);
-
-    if (savedReminders) {
+    const initializeAppData = async () => {
+      // 1. Load custom sounds from IndexedDB and persist them to native Android files
+      let loadedSounds: { name: string; url: string }[] = [];
       try {
-        let parsed: ReminderItem[] = JSON.parse(savedReminders);
-        // Automatically roll forward any repeating reminders whose target_time has passed
-        let hasChanges = false;
-        parsed = parsed.map((item) => {
-          if (item.repeat && item.repeat !== 'なし') {
-            const t = parseDateTime(item.target_time);
-            if (t && t.getTime() <= Date.now()) {
-              const nextTime = getNextFutureOccurrence(item.target_time, item.repeat);
-              if (nextTime && nextTime !== item.target_time) {
-                hasChanges = true;
-                return { ...item, target_time: nextTime, snoozed_until: undefined };
-              }
+        const sounds = await getAllCustomSounds();
+        if (sounds && sounds.length > 0) {
+          loadedSounds = sounds;
+          setCustomSounds(sounds);
+          for (const s of sounds) {
+            if (s.name && s.url) {
+              await saveNativeAudioFile(s.name, s.url);
             }
           }
-          return item;
-        });
-
-        if (hasChanges) {
-          try {
-            localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(parsed));
-          } catch {}
         }
-
-        setReminders(parsed);
-        syncAllNativeReminders(parsed);
-      } catch (e) {
-        console.error('Failed to parse saved reminders', e);
+      } catch (err) {
+        console.warn('Failed to load custom sounds on startup:', err);
       }
-    } else {
-      const now = new Date();
-      const inTenMin = new Date(now.getTime() + 10 * 60 * 1000);
-      const defaultReminders: ReminderItem[] = [
-        {
-          id: 'sample-1',
-          title: '☕ ほっと一息リフレッシュ',
-          memo: '水分補給とお茶の時間。少し背伸びをしてリフレッシュしましょう！',
-          sound: '電子音（ピピッ）',
-          duration: 10,
-          repeat: 'なし',
-          notices: '5分前',
-          snooze_min: 5,
-          target_time: formatDateTime(inTenMin),
-          volume: 70,
-        },
-      ];
-      setReminders(defaultReminders);
-      try {
-        localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(defaultReminders));
-      } catch {}
-      syncAllNativeReminders(defaultReminders);
-    }
 
-    if (savedCompleted) {
-      try {
-        setCompleted(JSON.parse(savedCompleted));
-      } catch (e) {
-        console.error('Failed to parse saved completed', e);
+      // 2. Load reminders, roll forward repeats, and reconcile audio base64
+      const savedReminders = localStorage.getItem(STORAGE_REMINDERS_KEY);
+      if (savedReminders) {
+        try {
+          let parsed: ReminderItem[] = JSON.parse(savedReminders);
+          let hasChanges = false;
+          parsed = parsed.map((item) => {
+            if (item.repeat && item.repeat !== 'なし') {
+              const t = parseDateTime(item.target_time);
+              if (t && t.getTime() <= Date.now()) {
+                const nextTime = getNextFutureOccurrence(item.target_time, item.repeat);
+                if (nextTime && nextTime !== item.target_time) {
+                  hasChanges = true;
+                  return { ...item, target_time: nextTime, snoozed_until: undefined };
+                }
+              }
+            }
+            return item;
+          });
+
+          // Attach custom sound URLs from IndexedDB so native alarm gets full audioBase64
+          if (loadedSounds.length > 0) {
+            parsed = parsed.map((r) => {
+              if (r.sound) {
+                const matched = loadedSounds.find((s) => s.name === r.sound);
+                if (matched && matched.url) {
+                  return { ...r, custom_sound_url: matched.url };
+                }
+              }
+              return r;
+            });
+          }
+
+          if (hasChanges) {
+            try {
+              const sanitized = parsed.map((r) => {
+                if (r.custom_sound_url && r.custom_sound_url.length > 500) {
+                  return { ...r, custom_sound_url: undefined };
+                }
+                return r;
+              });
+              localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(sanitized));
+            } catch {}
+          }
+
+          setReminders(parsed);
+          // Sync with native AlarmClock with audioBase64 fully populated
+          await syncAllNativeReminders(parsed);
+        } catch (e) {
+          console.error('Failed to parse saved reminders', e);
+        }
+      } else {
+        const now = new Date();
+        const inTenMin = new Date(now.getTime() + 10 * 60 * 1000);
+        const defaultReminders: ReminderItem[] = [
+          {
+            id: 'sample-1',
+            title: '☕ ほっと一息リフレッシュ',
+            memo: '水分補給とお茶の時間。少し背伸びをしてリフレッシュしましょう！',
+            sound: '電子音（ピピッ）',
+            duration: 10,
+            repeat: 'なし',
+            notices: '5分前',
+            snooze_min: 5,
+            target_time: formatDateTime(inTenMin),
+            volume: 70,
+          },
+        ];
+        setReminders(defaultReminders);
+        try {
+          localStorage.setItem(STORAGE_REMINDERS_KEY, JSON.stringify(defaultReminders));
+        } catch {}
+        await syncAllNativeReminders(defaultReminders);
       }
-    }
+      const savedCompleted = localStorage.getItem(STORAGE_COMPLETED_KEY);
+      if (savedCompleted) {
+        try {
+          setCompleted(JSON.parse(savedCompleted));
+        } catch (e) {
+          console.error('Failed to parse saved completed', e);
+        }
+      }
+    };
+
+    initializeAppData();
 
     initNativeAlarmSystem();
-    requestNotificationPermission();
+    if (!Capacitor.isNativePlatform()) {
+      requestNotificationPermission();
+    }
   }, []);
 
   // When app returns to foreground, check if any repeating alarms should roll forward
@@ -199,6 +260,7 @@ export default function App() {
   const updateRemindersState = (newReminders: ReminderItem[]) => {
     setReminders(newReminders);
     try {
+      // Strip huge base64 from localStorage to never exceed 5MB quota
       const sanitized = newReminders.map((r) => {
         if (r.custom_sound_url && r.custom_sound_url.length > 500) {
           return { ...r, custom_sound_url: undefined };
@@ -226,6 +288,80 @@ export default function App() {
       console.warn('LocalStorage save failed:', e);
     }
   };
+
+  // Trigger alarm modal & sound
+  const triggerAlarm = (item: ReminderItem, isNotice: boolean, noticeLabel?: string) => {
+    if (activeAlarm && activeAlarm.reminder.id === item.id) return;
+
+    setActiveAlarm({
+      reminder: item,
+      isPreNotice: isNotice,
+      preLabel: noticeLabel,
+      alarmKey: `${item.id}-${Date.now()}`,
+    });
+
+    const vol = (item as any).volume !== undefined ? (item as any).volume : 70;
+    playAlarmSound(item.sound, item.custom_sound_url, vol, item.duration || 15);
+
+    if (!Capacitor.isNativePlatform()) {
+      const titlePrefix = isNotice ? `📢【事前通知 ${noticeLabel}】` : '⏰【リマインダー】';
+      sendSystemNotification(`${titlePrefix} ${item.title}`, {
+        body: item.memo || item.target_time,
+        requireInteraction: true,
+      });
+    }
+  };
+
+  // Timer loop for in-app alarm triggering
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const now = new Date();
+      const nowTs = now.getTime();
+
+      reminders.forEach((item) => {
+        const targetDate = parseDateTime(item.target_time);
+        if (!targetDate) return;
+
+        // Snooze check
+        if (item.snoozed_until) {
+          const snoozeDate = new Date(item.snoozed_until);
+          if (nowTs >= snoozeDate.getTime() && nowTs - snoozeDate.getTime() < 30000) {
+            triggerAlarm(item, false);
+            return;
+          }
+        }
+
+        // Advance notices check
+        if (item.notices && item.notices !== 'なし' && !item.snoozed_until) {
+          const parsed = parseNoticesString(item.notices);
+          parsed.forEach((n) => {
+            const noticeTs = targetDate.getTime() - n.sec * 1000;
+            if (Math.abs(nowTs - noticeTs) < 15000) {
+              const firedKey = `fired_notice_${item.id}_${n.label}`;
+              if (!sessionStorage.getItem(firedKey)) {
+                sessionStorage.setItem(firedKey, 'true');
+                triggerAlarm(item, true, n.label);
+              }
+            }
+          });
+        }
+
+        // Main scheduled alarm check
+        if (!item.snoozed_until) {
+          const diff = nowTs - targetDate.getTime();
+          if (diff >= 0 && diff < 30000) {
+            const firedKey = `fired_main_${item.id}_${item.target_time}`;
+            if (!sessionStorage.getItem(firedKey)) {
+              sessionStorage.setItem(firedKey, 'true');
+              triggerAlarm(item, false);
+            }
+          }
+        }
+      });
+    }, 4000);
+
+    return () => clearInterval(timer);
+  }, [reminders, activeAlarm]);
 
   // Google Calendar Push Action (100% Native Intent: opens Android Google Calendar app directly)
   const handlePushToGoogleCalendar = async (item: ReminderItem) => {
@@ -300,7 +436,7 @@ export default function App() {
     }
   };
 
-  // Add/Save Reminder
+  // Add/Save Reminder (Robust with no quota crashes)
   const handleSaveReminder = async (item: ReminderItem) => {
     let updated: ReminderItem[];
     if (isEditingFromCompleted) {
@@ -380,12 +516,51 @@ export default function App() {
     showToast(`↩️ 「${item.title}」を予定表に戻しました`);
   };
 
+  // Delete reminder permanently (including repeating schedules) with 2-step confirmation
+  const handleDeleteReminder = (item: ReminderItem) => {
+    const isRepeating = Boolean(item.repeat && item.repeat !== 'なし');
+    setConfirmDialog({
+      isOpen: true,
+      title: isRepeating ? 'リピート予定の完全削除' : '予定の完全削除',
+      message: isRepeating
+        ? `「${item.title}」はリピート設定（${item.repeat}）が登録されています。\n削除すると、今回分だけでなく「次回以降のすべての予定」とアラームも完全に削除されます。`
+        : `「${item.title}」の予定と予約されているアラームを完全に削除しますか？`,
+      requireTwoStep: true,
+      stepOneConfirmLabel: '次へ進む（最終確認）',
+      stepTwoTitle: '最終確認：本当に削除しますか？',
+      stepTwoMessage: isRepeating
+        ? `「${item.title}」（${item.repeat}）を完全に削除します。\nこの操作は取り消せません。`
+        : `「${item.title}」を完全に削除します。\nこの操作は取り消せません。`,
+      stepTwoCheckboxLabel: isRepeating
+        ? '次回以降の繰り返し予定も含めて削除することに同意する'
+        : 'この予定を完全に削除することに同意する',
+      confirmLabel: '完全に削除する',
+      onConfirm: async () => {
+        await cancelNativeReminder(item.id);
+        if (isEditingFromCompleted) {
+          const nextCompleted = completed.filter((c) => c.id !== item.id);
+          updateCompletedState(nextCompleted);
+          setIsEditingFromCompleted(false);
+        } else {
+          const nextReminders = reminders.filter((r) => r.id !== item.id);
+          updateRemindersState(nextReminders);
+        }
+        setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
+        setIsReminderModalOpen(false);
+        setEditingItem(null);
+        showToast(`🗑️ 「${item.title}」を完全に削除しました`);
+      },
+    });
+  };
+
   // Delete completed
   const handleDeleteCompleted = (item: ReminderItem) => {
     setConfirmDialog({
       isOpen: true,
       title: '完了履歴の削除',
       message: `「${item.title}」の履歴を完全に削除しますか？`,
+      confirmLabel: '削除する',
+      requireTwoStep: false,
       onConfirm: () => {
         const next = completed.filter((c) => c.id !== item.id);
         updateCompletedState(next);
@@ -401,6 +576,8 @@ export default function App() {
       isOpen: true,
       title: '完了履歴の一括削除',
       message: `完了済みの全 ${completed.length} 件の履歴をすべて削除しますか？`,
+      confirmLabel: '削除する',
+      requireTwoStep: false,
       onConfirm: () => {
         updateCompletedState([]);
         setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
@@ -409,7 +586,7 @@ export default function App() {
     });
   };
 
-  // Audio additions preserved properly in IndexedDB
+  // Audio additions preserved properly in IndexedDB & internal device storage
   const handleAddCustomSounds = async (newSounds: { name: string; url: string; size?: number; mimeType?: string }[]) => {
     for (const ns of newSounds) {
       await saveCustomSound({
@@ -420,10 +597,13 @@ export default function App() {
         size: ns.size || ns.url.length,
         createdAt: Date.now(),
       }).catch((e) => console.warn('Failed to save to IndexedDB:', e));
+
+      // Also permanently save to Android's internal files storage (survives app updates)
+      await saveNativeAudioFile(ns.name, ns.url);
     }
     const all = await getAllCustomSounds();
     setCustomSounds(all);
-    showToast(`🎵 音源「${newSounds[0]?.name}」を保存しました`);
+    showToast(`🎵 音源「${newSounds[0]?.name}」を端末ストレージに保存しました`);
   };
 
   const handleDeleteCustomSound = async (name: string) => {
@@ -453,7 +633,7 @@ export default function App() {
     <div className="min-h-screen bg-[#1a202c] text-white flex flex-col items-center">
       {/* Main Container - Mobile Responsive */}
       <div className={`w-full ${isFramed ? 'max-w-[430px]' : 'max-w-2xl'} min-h-screen flex flex-col bg-[#242e3d] shadow-2xl relative border-x border-gray-700/60`}>
-        {/* Header (Title, 最新化, 説明書) */}
+        {/* Header (Clean: Title, 最新化, 説明書) */}
         <Header
           onOpenPhoneModal={() => setIsPhoneModalOpen(true)}
           isFramed={isFramed}
@@ -499,6 +679,8 @@ export default function App() {
           </button>
         </div>
 
+
+
         {/* Selection Toolbar (for sending to Google Calendar) */}
         {currentTab === 'schedule' && reminders.length > 0 && (
           <div className="bg-[#1f2937] px-3.5 py-2 border-b border-gray-700/70 flex items-center justify-between text-xs">
@@ -537,14 +719,14 @@ export default function App() {
                 disabled={isBatchExporting}
                 className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold transition cursor-pointer flex items-center gap-1 shadow-sm disabled:opacity-50"
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>{isBatchExporting ? '送信中...' : `一括送信 (${selectedReminderIds.size})`}</span>
+                <Send className="w-3 h-3" />
+                <span>{isBatchExporting ? '送信中...' : `${selectedReminderIds.size}件をカレンダーに送信`}</span>
               </button>
             )}
           </div>
         )}
 
-        {/* Tab 1: Schedule List */}
+        {/* Tab 1: Schedules List */}
         {currentTab === 'schedule' && (
           <div className="flex-1 p-3.5 space-y-4 pb-24">
             {reminders.length === 0 ? (
@@ -736,6 +918,7 @@ export default function App() {
         customSounds={customSounds}
         onAddCustomSounds={handleAddCustomSounds}
         onDeleteCustomSound={handleDeleteCustomSound}
+        onDelete={editingItem ? handleDeleteReminder : undefined}
       />
 
       {/* Triggered Alarm Fullscreen Modal */}
@@ -778,9 +961,14 @@ export default function App() {
         isOpen={confirmDialog.isOpen}
         title={confirmDialog.title}
         message={confirmDialog.message}
-        confirmLabel="削除する"
+        confirmLabel={confirmDialog.confirmLabel || '削除する'}
         cancelLabel="キャンセル"
         isDestructive={true}
+        requireTwoStep={confirmDialog.requireTwoStep}
+        stepOneConfirmLabel={confirmDialog.stepOneConfirmLabel}
+        stepTwoTitle={confirmDialog.stepTwoTitle}
+        stepTwoMessage={confirmDialog.stepTwoMessage}
+        stepTwoCheckboxLabel={confirmDialog.stepTwoCheckboxLabel}
         onConfirm={confirmDialog.onConfirm}
         onCancel={() => setConfirmDialog((prev) => ({ ...prev, isOpen: false }))}
       />
