@@ -1,8 +1,14 @@
+import { Capacitor } from '@capacitor/core';
+
 /**
  * Helper for browser system notifications and device vibration.
+ * Disabled on native Capacitor Android because native AlarmActivity / AlarmService handle alarms directly without banner popups.
  */
 
 export const requestNotificationPermission = async (): Promise<boolean> => {
+  if (Capacitor.isNativePlatform()) {
+    return false;
+  }
   if (!('Notification' in window)) {
     return false;
   }
@@ -20,7 +26,11 @@ export const sendSystemNotification = async (
   title: string,
   options?: NotificationOptions
 ) => {
-  // Trigger vibration if on mobile device
+  if (Capacitor.isNativePlatform()) {
+    return;
+  }
+
+  // Trigger vibration if on mobile web browser
   if ('vibrate' in navigator) {
     try {
       navigator.vibrate([300, 150, 300, 150, 500]);
