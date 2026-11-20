@@ -61,7 +61,15 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   const [soundFeedback, setSoundFeedback] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [highlightDeleteBox, setHighlightDeleteBox] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deleteSectionRef = useRef<HTMLDivElement>(null);
+
+  const scrollToDeleteSection = () => {
+    deleteSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    setHighlightDeleteBox(true);
+    setTimeout(() => setHighlightDeleteBox(false), 1600);
+  };
 
   // Initialize or reset form
   useEffect(() => {
@@ -559,6 +567,18 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                   />
                 </div>
               )}
+
+              {targetItem && onDelete && (
+                <button
+                  type="button"
+                  onClick={scrollToDeleteSection}
+                  className="ml-auto px-2.5 py-1.5 rounded-xl bg-red-950/60 hover:bg-red-900/80 text-red-300 hover:text-white border border-red-700/60 text-xs font-bold transition cursor-pointer flex items-center gap-1 shrink-0"
+                  title="最下段の削除欄へ移動"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>削除欄へ</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -658,7 +678,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               </button>
             </div>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
               <select
                 value={sound}
                 onChange={(e) => {
@@ -673,7 +693,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                     setCustomSoundName(undefined);
                   }
                 }}
-                className="flex-1 bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-2 text-white font-bold text-xs cursor-pointer truncate"
+                className="flex-1 min-w-0 bg-[#3a4a5e] border border-gray-600 rounded-xl px-2.5 py-2 text-white font-bold text-xs cursor-pointer truncate"
               >
                 <optgroup label="アプリ内蔵音源">
                   {PRESET_SOUNDS.map((ps) => (
@@ -717,17 +737,6 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 )}
               </button>
 
-              {customSounds.some((cs) => cs.name === sound) && (
-                <button
-                  type="button"
-                  onClick={handleDeleteSelectedCustomSound}
-                  className="p-2 rounded-xl bg-red-900/70 hover:bg-red-800 border border-red-700/60 text-red-200 transition cursor-pointer flex items-center justify-center shrink-0"
-                  title="削除"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-
               <input
                 ref={fileInputRef}
                 type="file"
@@ -736,6 +745,18 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 className="hidden"
               />
             </div>
+
+            {customSounds.some((cs) => cs.name === sound) && onDeleteCustomSound && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={handleDeleteSelectedCustomSound}
+                  className="text-[11px] text-gray-400 hover:text-red-300 underline underline-offset-2 transition cursor-pointer"
+                >
+                  取り込み音源「{sound}」をリストから削除
+                </button>
+              </div>
+            )}
 
             {soundFeedback && (
               <div className="text-[11px] text-emerald-300 bg-emerald-950/80 border border-emerald-600/60 px-2 py-1 rounded-lg flex items-center gap-1.5 animate-in fade-in">
@@ -839,8 +860,14 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
 
           {/* Safe Separated Delete Section (Anti-Misclick Zone at bottom of scroll) */}
           {targetItem && onDelete && (
-            <div className="pt-3 mt-2 border-t border-dashed border-gray-600/80">
-              <div className="bg-red-950/25 border border-red-900/50 rounded-2xl p-3 space-y-2">
+            <div ref={deleteSectionRef} className="pt-3 mt-2 border-t border-dashed border-gray-600/80">
+              <div
+                className={`bg-red-950/25 border rounded-2xl p-3 space-y-2 transition-all ${
+                  highlightDeleteBox
+                    ? 'border-red-400 ring-2 ring-red-400/70 bg-red-950/50'
+                    : 'border-red-900/50'
+                }`}
+              >
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-red-300 flex items-center gap-1.5">
                     <Trash2 className="w-3.5 h-3.5" />
@@ -854,8 +881,8 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                 </div>
                 <p className="text-[11px] text-gray-400 leading-relaxed">
                   {targetItem.repeat && targetItem.repeat !== 'なし'
-                    ? '「完了」ではなく予定自体を削除したい場合はこちらから削除できます（誤操作防止のため2段階確認が開きます）。'
-                    : 'この予定と予約済みアラームを完全に削除します（誤操作防止のため2段階確認が開きます）。'}
+                    ? '「完了」ではなく予定自体を削除したい場合はこちらから削除できます（確認画面で「はい / いいえ」を選べます）。'
+                    : 'この予定と予約済みアラームを削除します（確認画面で「はい / いいえ」を選べます）。'}
                 </p>
                 <button
                   type="button"
@@ -863,7 +890,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
                   className="w-full py-2 px-3 rounded-xl bg-red-950/70 hover:bg-red-900/90 text-red-300 hover:text-white border border-red-700/60 font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>この予定自体を削除する…</span>
+                  <span>この予定自体を削除する</span>
                 </button>
               </div>
             </div>
