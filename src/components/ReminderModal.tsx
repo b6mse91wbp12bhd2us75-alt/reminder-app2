@@ -16,6 +16,7 @@ interface ReminderModalProps {
   customSounds?: { name: string; url: string }[];
   onAddCustomSounds?: (sounds: { name: string; url: string; size?: number; mimeType?: string }[]) => void;
   onDeleteCustomSound?: (name: string) => void;
+  onDelete?: (reminder: ReminderItem) => void;
 }
 
 export const ReminderModal: React.FC<ReminderModalProps> = ({
@@ -26,6 +27,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
   customSounds = [],
   onAddCustomSounds,
   onDeleteCustomSound,
+  onDelete,
 }) => {
   const [title, setTitle] = useState('');
   const [memo, setMemo] = useState('');
@@ -108,7 +110,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
         setRepeatType('なし');
       }
 
-      // Parse notices: if empty or 'なし', explicitly set to empty array
+      // Parse notices
       if (targetItem.notices && targetItem.notices !== 'なし') {
         const parsedList: NoticeOption[] = [];
         const parts = targetItem.notices.split(',');
@@ -178,7 +180,7 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
     setDay(padZero(d.getDate()));
   };
 
-  // Quick timer preset
+  // Quick timer preset (now, +5m, +10m, +15m, +30m, +1h)
   const setQuickTimer = (mins: number) => {
     const d = new Date();
     if (mins > 0) {
@@ -695,12 +697,24 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               <button
                 type="button"
                 onClick={handleTestSound}
-                className={`p-2 rounded-xl border transition cursor-pointer flex items-center justify-center shrink-0 ${
-                  isPlayingTest ? 'bg-amber-600 text-white border-amber-500' : 'bg-[#2d3748] hover:bg-gray-700 text-gray-200 border-gray-600'
+                className={`px-3 py-2 rounded-xl border font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5 shrink-0 ${
+                  isPlayingTest
+                    ? 'bg-red-600 hover:bg-red-500 text-white border-red-400 shadow-md animate-pulse'
+                    : 'bg-[#2d3748] hover:bg-gray-700 text-gray-200 border-gray-600'
                 }`}
-                title="テスト再生"
+                title={isPlayingTest ? '試聴を停止' : 'テスト試聴'}
               >
-                {isPlayingTest ? <Square className="w-4 h-4 fill-current text-white" /> : <Play className="w-4 h-4 fill-current text-emerald-400" />}
+                {isPlayingTest ? (
+                  <>
+                    <Square className="w-3.5 h-3.5 fill-current text-white" />
+                    <span>停止</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-current text-emerald-400" />
+                    <span>試聴</span>
+                  </>
+                )}
               </button>
 
               {customSounds.some((cs) => cs.name === sound) && (
@@ -822,6 +836,38 @@ export const ReminderModal: React.FC<ReminderModalProps> = ({
               ※電車やバス、街中では「消音」または「30%」が安心です。0%時はバイブレーションのみ作動します。
             </p>
           </div>
+
+          {/* Safe Separated Delete Section (Anti-Misclick Zone at bottom of scroll) */}
+          {targetItem && onDelete && (
+            <div className="pt-3 mt-2 border-t border-dashed border-gray-600/80">
+              <div className="bg-red-950/25 border border-red-900/50 rounded-2xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-red-300 flex items-center gap-1.5">
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>予定の完全削除</span>
+                  </span>
+                  {targetItem.repeat && targetItem.repeat !== 'なし' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-900/70 text-red-200 border border-red-700/60">
+                      リピート({targetItem.repeat})も全削除
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-400 leading-relaxed">
+                  {targetItem.repeat && targetItem.repeat !== 'なし'
+                    ? '「完了」ではなく予定自体を削除したい場合はこちらから削除できます（誤操作防止のため2段階確認が開きます）。'
+                    : 'この予定と予約済みアラームを完全に削除します（誤操作防止のため2段階確認が開きます）。'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onDelete(targetItem)}
+                  className="w-full py-2 px-3 rounded-xl bg-red-950/70 hover:bg-red-900/90 text-red-300 hover:text-white border border-red-700/60 font-bold text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>この予定自体を削除する…</span>
+                </button>
+              </div>
+            </div>
+          )}
         </form>
 
         <div className="px-4 py-3 bg-[#1a202c] border-t border-gray-700/80 shrink-0 shadow-lg">
