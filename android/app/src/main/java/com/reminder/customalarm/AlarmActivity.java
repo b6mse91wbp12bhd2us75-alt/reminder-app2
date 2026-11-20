@@ -1,7 +1,7 @@
 package com.reminder.customalarm;
 
+import android.app.ActivityOptions;
 import android.app.AlarmManager;
-import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
@@ -10,6 +10,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -22,6 +23,7 @@ import android.widget.TextView;
 import android.util.Log;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import java.lang.reflect.Method;
 import java.util.Calendar;
 
 /**
@@ -37,11 +39,28 @@ public class AlarmActivity extends AppCompatActivity {
     public static final String EXTRA_TIME = "TARGET_TIME";
     public static final String EXTRA_IS_PRE_NOTICE = "IS_PRE_NOTICE";
 
+    private PowerManager.WakeLock activityWakeLock;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Turn on screen, show directly over lockscreen without showing PIN bouncer veil
+        // Turn on screen immediately and show directly over lockscreen without showing PIN bouncer veil
+        acquireScreenWakeLock();
+        configureLockscreenWindow();
+        handleAlarmIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        acquireScreenWakeLock();
+        configureLockscreenWindow();
+        handleAlarmIntent(intent);
+    }
+
+    private void configureLockscreenWindow() {
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
@@ -53,21 +72,35 @@ public class AlarmActivity extends AppCompatActivity {
             | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
             | WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
         );
+    }
 
-        // Cancel any lingering notifications to guarantee clean screen
+    private void acquireScreenWakeLock() {
         try {
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) {
-                nm.cancel(987654);
+            if (activityWakeLock != null && activityWakeLock.isHeld()) {
+                activityWakeLock.release();
             }
-        } catch (Exception ignored) {}
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null) {
+                activityWakeLock = pm.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK
+                    | PowerManager.ACQUIRE_CAUSES_WAKEUP
+                    | PowerManager.ON_AFTER_RELEASE,
+                    "reminder:ActivityWakeLock"
+                );
+                activityWakeLock.acquire(2 * 60 * 1000L);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to acquire activity wakelock", e);
+        }
+    }
 
-        // Read intent extras
-        Intent intent = getIntent();
+    private void handleAlarmIntent(Intent intent) {
         String title = intent != null && intent.hasExtra(EXTRA_TITLE) ? intent.getStringExtra(EXTRA_TITLE) : "リマインダー";
         if (title == null || title.isEmpty()) title = "リマインダー";
         String memo = intent != null && intent.hasExtra(EXTRA_MEMO) ? intent.getStringExtra(EXTRA_MEMO) : "";
-        boolean isPreNotice = intent != null && intent.getBooleanExtra(EXTRA_IS_PRE_NOTICE, false);
+        String id = intent != null ? intent.getStringExtra(EXTRA_ID) : null;
+        boolean isPreNotice = (intent != null && intent.getBooleanExtra(EXTRA_IS_PRE_NOTICE, false))
+            || (id != null && id.contains("_notice_"));
 
         // Auto-reschedule repeating alarm for next occurrence (so tomorrow is already scheduled)
         if (intent != null) {
@@ -147,14 +180,18 @@ public class AlarmActivity extends AppCompatActivity {
             if (alarmManager == null) return;
 
             int requestCode = Math.abs(id.hashCode());
+            int showRequestCode = (requestCode + 100000) & 0x7FFFFFFF;
+            int immutableFlag = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+            Bundle balOptionsBundle = createBackgroundAllowedOptionsBundle();
 
             Intent showIntent = new Intent(this, MainActivity.class);
             showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             PendingIntent showPendingIntent = PendingIntent.getActivity(
                 this,
-                requestCode,
+                showRequestCode,
                 showIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+                balOptionsBundle
             );
 
             Intent nextAlarmIntent = new Intent(this, AlarmActivity.class);
@@ -173,15 +210,35 @@ public class AlarmActivity extends AppCompatActivity {
                 this,
                 requestCode,
                 nextAlarmIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+                PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+                balOptionsBundle
             );
 
             AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(nextTimestamp, showPendingIntent);
             alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-            Log.d(TAG, "Rescheduled next repeat occurrence for: " + id + " at: " + nextTimestamp);
+            Log.d(TAG, "Rescheduled next repeat occurrence with BAL opt-in for: " + id + " at: " + nextTimestamp);
         } catch (Exception e) {
             Log.e(TAG, "Failed to reschedule alarm", e);
         }
+    }
+
+    private Bundle createBackgroundAllowedOptionsBundle() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            );
+            if (Build.VERSION.SDK_INT >= 35) {
+                try {
+                    Method creatorMethod = ActivityOptions.class.getMethod(
+                        "setPendingIntentCreatorBackgroundActivityStartMode", int.class
+                    );
+                    creatorMethod.invoke(options, ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                } catch (Exception ignored) {}
+            }
+            return options.toBundle();
+        }
+        return null;
     }
 
     private View createFullScreenAlarmView(String title, String memo, boolean isPreNotice) {
@@ -340,11 +397,32 @@ public class AlarmActivity extends AppCompatActivity {
     }
 
     private void stopAlarmAndFinish() {
-        Intent stopService = new Intent(this, AlarmService.class);
-        stopService.setAction(AlarmService.ACTION_STOP_ALARM);
-        startService(stopService);
+        try {
+            Intent stopService = new Intent(this, AlarmService.class);
+            stopService.setAction(AlarmService.ACTION_STOP_ALARM);
+            startService(stopService);
+        } catch (Exception e) {
+            try {
+                stopService(new Intent(this, AlarmService.class));
+            } catch (Exception ignored) {}
+        }
 
-        finish();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            finishAndRemoveTask();
+        } else {
+            finish();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (activityWakeLock != null && activityWakeLock.isHeld()) {
+            try {
+                activityWakeLock.release();
+            } catch (Exception ignored) {}
+            activityWakeLock = null;
+        }
+        super.onDestroy();
     }
 
     private int dpToPx(int dp) {
