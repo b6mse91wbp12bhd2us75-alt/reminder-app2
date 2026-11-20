@@ -26,8 +26,6 @@ import {
   syncAllNativeReminders,
   stopNativeAlarm,
   openAndroidCalendarEvent,
-  checkOverlayPermission,
-  requestOverlayPermission,
   saveNativeAudioFile,
 } from './services/nativeAlarm';
 import {
@@ -90,23 +88,6 @@ export default function App() {
 
   // Smartphone frame mockup toggle for desktop
   const [isFramed, setIsFramed] = useState(true);
-
-  // Overlay permission state (他のアプリの上に重ねて表示)
-  const [hasOverlayPermission, setHasOverlayPermission] = useState<boolean>(true);
-
-  const verifyOverlayPermission = async () => {
-    const granted = await checkOverlayPermission();
-    setHasOverlayPermission(granted);
-  };
-
-  useEffect(() => {
-    verifyOverlayPermission();
-    const handleFocus = () => {
-      verifyOverlayPermission();
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, []);
 
   // 1. Initial Load from LocalStorage & IndexedDB
   useEffect(() => {
