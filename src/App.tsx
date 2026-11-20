@@ -64,6 +64,7 @@ export default function App() {
     title: string;
     message: string;
     confirmLabel?: string;
+    cancelLabel?: string;
     requireTwoStep?: boolean;
     stepOneConfirmLabel?: string;
     stepTwoTitle?: string;
@@ -497,25 +498,18 @@ export default function App() {
     showToast(`↩️ 「${item.title}」を予定表に戻しました`);
   };
 
-  // Delete reminder permanently (including repeating schedules) with 2-step confirmation
+  // Delete reminder permanently (including repeating schedules) with direct Yes/No confirmation
   const handleDeleteReminder = (item: ReminderItem) => {
     const isRepeating = Boolean(item.repeat && item.repeat !== 'なし');
     setConfirmDialog({
       isOpen: true,
-      title: isRepeating ? 'リピート予定の完全削除' : '予定の完全削除',
+      title: isRepeating ? 'リピート予定を削除しますか？' : '予定を削除しますか？',
       message: isRepeating
-        ? `「${item.title}」はリピート設定（${item.repeat}）が登録されています。\n削除すると、今回分だけでなく「次回以降のすべての予定」とアラームも完全に削除されます。`
-        : `「${item.title}」の予定と予約されているアラームを完全に削除しますか？`,
-      requireTwoStep: true,
-      stepOneConfirmLabel: '次へ進む（最終確認）',
-      stepTwoTitle: '最終確認：本当に削除しますか？',
-      stepTwoMessage: isRepeating
-        ? `「${item.title}」（${item.repeat}）を完全に削除します。\nこの操作は取り消せません。`
-        : `「${item.title}」を完全に削除します。\nこの操作は取り消せません。`,
-      stepTwoCheckboxLabel: isRepeating
-        ? '次回以降の繰り返し予定も含めて削除することに同意する'
-        : 'この予定を完全に削除することに同意する',
-      confirmLabel: '完全に削除する',
+        ? `「${item.title}」（${item.repeat}）を削除しますか？\n次回以降の予定とアラームもすべて削除されます。`
+        : `「${item.title}」の予定を削除しますか？`,
+      requireTwoStep: false,
+      confirmLabel: 'はい',
+      cancelLabel: 'いいえ',
       onConfirm: async () => {
         await cancelNativeReminder(item.id);
         if (isEditingFromCompleted) {
@@ -529,7 +523,7 @@ export default function App() {
         setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
         setIsReminderModalOpen(false);
         setEditingItem(null);
-        showToast(`🗑️ 「${item.title}」を完全に削除しました`);
+        showToast(`🗑️ 「${item.title}」を削除しました`);
       },
     });
   };
@@ -943,7 +937,7 @@ export default function App() {
         title={confirmDialog.title}
         message={confirmDialog.message}
         confirmLabel={confirmDialog.confirmLabel || '削除する'}
-        cancelLabel="キャンセル"
+        cancelLabel={confirmDialog.cancelLabel || 'キャンセル'}
         isDestructive={true}
         requireTwoStep={confirmDialog.requireTwoStep}
         stepOneConfirmLabel={confirmDialog.stepOneConfirmLabel}
