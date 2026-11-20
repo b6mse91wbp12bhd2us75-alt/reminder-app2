@@ -34,7 +34,7 @@ public class AlarmService extends Service {
     public static final String ACTION_STOP_ALARM = "com.reminder.customalarm.ACTION_STOP_ALARM";
 
     // 新チャンネルID（黒い小窓を絶対に出さないサイレントLOW優先度）
-    public static final String CHANNEL_ID = "reminder_silent_playback_channel_v6";
+    public static final String CHANNEL_ID = "reminder_silent_playback_channel_v7";
     private static final int NOTIFICATION_ID = 987654;
 
     private MediaPlayer mediaPlayer;
@@ -95,17 +95,7 @@ public class AlarmService extends Service {
             Log.w(TAG, "Failed to acquire wakelock", e);
         }
 
-        // 2. Build Stop Intent
-        Intent stopIntent = new Intent(this, AlarmService.class);
-        stopIntent.setAction(ACTION_STOP_ALARM);
-        PendingIntent stopPendingIntent = PendingIntent.getService(
-            this,
-            0,
-            stopIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
-        );
-
-        // 3. Build FullScreen Intent for notification tap
+        // 2. Build FullScreen Intent for notification tap
         Intent fullScreenIntent = new Intent(this, AlarmActivity.class);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_TITLE, title);
         fullScreenIntent.putExtra(AlarmActivity.EXTRA_MEMO, memo);
@@ -119,8 +109,8 @@ public class AlarmService extends Service {
 
         int appIcon = getApplicationInfo().icon != 0 ? getApplicationInfo().icon : android.R.drawable.ic_lock_idle_alarm;
 
-        // 4. バックグラウンド音声再生のためのサイレント常駐通知
-        // 重要: setFullScreenIntent は付けず、PRIORITY_LOW とすることで、
+        // 3. バックグラウンド音声再生のためのサイレント常駐通知
+        // 重要: setFullScreenIntent は付けず、PRIORITY_LOW + VISIBILITY_SECRET + FOREGROUND_SERVICE_DEFERRED とすることで、
         // 画面上部を覆う「黒ベタ小窓（ヘッドアップ通知）」は絶対に表示されません。
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(appIcon)
@@ -129,6 +119,7 @@ public class AlarmService extends Service {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
             .setContentIntent(fullScreenPendingIntent)
             .setSilent(true)
             .setOngoing(true)
@@ -332,6 +323,7 @@ public class AlarmService extends Service {
                     manager.deleteNotificationChannel("reminder_fullscreen_alarm_channel_v3");
                     manager.deleteNotificationChannel("reminder_silent_service_v4");
                     manager.deleteNotificationChannel("reminder_fullscreen_alarm_channel_v5");
+                    manager.deleteNotificationChannel("reminder_silent_playback_channel_v6");
                     manager.deleteNotificationChannel("reminder_channel");
                 } catch (Exception ignored) {}
 
