@@ -16,7 +16,13 @@ interface NativeAlarmPluginInterface {
     duration?: number;
     volume?: number;
     repeat?: string;
+    soundName?: string;
   }): Promise<{ success: boolean; audioPath?: string }>;
+
+  saveAudioFile?(options: {
+    name: string;
+    audioBase64: string;
+  }): Promise<{ success: boolean; filePath?: string }>;
 
   cancelAlarm(options: { id: string }): Promise<{ success: boolean }>;
 
@@ -28,6 +34,7 @@ interface NativeAlarmPluginInterface {
     memo?: string;
     audioBase64?: string;
     volume?: number;
+    soundName?: string;
   }): Promise<{ success: boolean }>;
 
   openCalendarEvent?(options: {
@@ -36,6 +43,9 @@ interface NativeAlarmPluginInterface {
     startTime?: number;
     endTime?: number;
   }): Promise<{ success: boolean }>;
+
+  checkOverlayPermission?(): Promise<{ granted: boolean }>;
+  requestOverlayPermission?(): Promise<{ success: boolean }>;
 }
 
 const NativeAlarm = registerPlugin<NativeAlarmPluginInterface>('NativeAlarm');
@@ -84,6 +94,22 @@ export const openAndroidCalendarEvent = async (item: {
     // fallback
   }
   return true;
+};
+
+/**
+ * Permanently save an external imported audio file to Android's internal app files directory.
+ * Survives APK updates and app restarts!
+ */
+export const saveNativeAudioFile = async (name: string, audioBase64: string): Promise<string | undefined> => {
+  if (Capacitor.isNativePlatform() && NativeAlarm.saveAudioFile) {
+    try {
+      const res = await NativeAlarm.saveAudioFile({ name, audioBase64 });
+      return res.filePath;
+    } catch (e) {
+      console.warn('[NativeAlarm] saveAudioFile error:', e);
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -144,6 +170,7 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
               : `予定時刻: ${item.target_time}（${notice.label}）`,
             timestamp: noticeTimestamp,
             audioBase64: item.custom_sound_url,
+            soundName: item.sound,
             duration,
             volume,
           });
@@ -175,6 +202,7 @@ export const scheduleNativeReminder = async (item: ReminderItem) => {
       memo: item.memo,
       timestamp: mainTimestamp,
       audioBase64: item.custom_sound_url,
+      soundName: item.sound,
       duration,
       volume,
       repeat: item.repeat || 'なし',
@@ -223,6 +251,7 @@ export const stopNativeAlarm = async () => {
 
 /**
  * Schedule an instant 10-second test alarm.
+ * Allows user to tap, immediately kill the app, turn screen OFF, and verify it rings in 10s.
  */
 export const scheduleQuickTestAlarm = async (delaySeconds = 10, audioBase64?: string): Promise<boolean> => {
   if (!Capacitor.isNativePlatform()) {
@@ -253,5 +282,33 @@ export const syncAllNativeReminders = async (reminders: ReminderItem[]) => {
 
   for (const rem of reminders) {
     await scheduleNativeReminder(rem);
+  }
+};
+
+/**
+ * Check if the app has been granted "Display over other apps" (SYSTEM_ALERT_WINDOW)
+ */
+export const checkOverlayPermission = async (): Promise<boolean> => {
+  if (Capacitor.isNativePlatform() && NativeAlarm.checkOverlayPermission) {
+    try {
+      const res = await NativeAlarm.checkOverlayPermission();
+      return !!res.granted;
+    } catch {
+      return true;
+    }
+  }
+  return true;
+};
+
+/**
+ * Request "Display over other apps" by opening Android system settings directly
+ */
+export const requestOverlayPermission = async (): Promise<void> => {
+  if (Capacitor.isNativePlatform() && NativeAlarm.requestOverlayPermission) {
+    try {
+      await NativeAlarm.requestOverlayPermission();
+    } catch (e) {
+      console.warn('requestOverlayPermission error:', e);
+    }
   }
 };
