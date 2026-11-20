@@ -1,11 +1,13 @@
 package com.reminder.customalarm;
 
+import android.app.ActivityOptions;
 import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
@@ -16,6 +18,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.lang.reflect.Method;
 
 /**
  * Custom Capacitor plugin exposing Android's AlarmManager.setAlarmClock
@@ -76,21 +79,21 @@ public class NativeAlarmPlugin extends Plugin {
 
             byte[] decodedBytes = Base64.decode(cleanBase64, Base64.DEFAULT);
 
-            // 1. safeNameで保存
+            // 1. Save with safeName
             File destSafe = new File(audioDir, "custom_audio_" + safeName + ".mp3");
             FileOutputStream fos1 = new FileOutputStream(destSafe);
             fos1.write(decodedBytes);
             fos1.flush();
             fos1.close();
 
-            // 2. 原音源名で保存
+            // 2. Save with raw name
             File destRaw = new File(audioDir, "custom_audio_" + name + ".mp3");
-            FileOutputStream fos2 = new FileOutputStream(destRaw);
+            FileOutputStream fos2 = new File(destRaw);
             fos2.write(decodedBytes);
             fos2.flush();
             fos2.close();
 
-            // 3. ハッシュ名で保存
+            // 3. Save with hash
             File destHash = new File(audioDir, "custom_sound_" + Math.abs(name.hashCode()) + ".mp3");
             FileOutputStream fos3 = new FileOutputStream(destHash);
             fos3.write(decodedBytes);
@@ -149,7 +152,7 @@ public class NativeAlarmPlugin extends Plugin {
             }
         }
 
-        // 注意: リピート予定や再設定時の音源消失を防ぐため、custom_alarm_<id>.mp3 は削除しません
+        // 注意: リピート予定や再設定時の音源消失を防ぐため、custom_alarm_<id>.mp3 は安易に削除しません
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);
@@ -280,17 +283,37 @@ public class NativeAlarmPlugin extends Plugin {
         }
 
         int requestCode = Math.abs(id.hashCode());
+        int showRequestCode = (requestCode + 100000) & 0x7FFFFFFF;
+        int immutableFlag = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+
+        // 旧バージョンのBroadcast経由アラームが残っていた場合は確実にキャンセル
+        try {
+            Intent legacyBroadcastIntent = new Intent(context, AlarmReceiver.class);
+            legacyBroadcastIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
+            PendingIntent legacyPi = PendingIntent.getBroadcast(
+                context,
+                requestCode,
+                legacyBroadcastIntent,
+                PendingIntent.FLAG_NO_CREATE | immutableFlag
+            );
+            if (legacyPi != null) {
+                alarmManager.cancel(legacyPi);
+                legacyPi.cancel();
+            }
+        } catch (Exception ignored) {}
+
+        Bundle balOptionsBundle = createBackgroundAllowedOptionsBundle();
 
         Intent showIntent = new Intent(context, MainActivity.class);
         showIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         PendingIntent showPendingIntent = PendingIntent.getActivity(
             context,
-            requestCode,
+            showRequestCode,
             showIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+            PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+            balOptionsBundle
         );
 
-        // AlarmActivity を直接起動する PendingIntent.getActivity を作成
         Intent alarmActivityIntent = new Intent(context, AlarmActivity.class);
         alarmActivityIntent.setAction("com.reminder.customalarm.ALARM_TRIGGER_" + id);
         alarmActivityIntent.putExtra("ID", id);
@@ -312,15 +335,35 @@ public class NativeAlarmPlugin extends Plugin {
             context,
             requestCode,
             alarmActivityIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0)
+            PendingIntent.FLAG_UPDATE_CURRENT | immutableFlag,
+            balOptionsBundle
         );
 
-        // setAlarmClock によりOS自身が全画面Activityを起動（重ねて表示権限は完全に不要）
+        // Android 14/15 BAL オプトイン付き setAlarmClock（「重ねて表示」権限なしで直接全面起動）
         AlarmManager.AlarmClockInfo clockInfo = new AlarmManager.AlarmClockInfo(timestamp, showPendingIntent);
         alarmManager.setAlarmClock(clockInfo, alarmPendingIntent);
-        Log.d(TAG, "Scheduled direct native AlarmClock Activity for ID: " + id + " at: " + timestamp + " with audio: " + audioFilePath);
+        Log.d(TAG, "Scheduled direct native AlarmClock Activity with BAL opt-in for ID: " + id + " at: " + timestamp + " with audio: " + audioFilePath);
 
         return audioFilePath;
+    }
+
+    private Bundle createBackgroundAllowedOptionsBundle() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setPendingIntentBackgroundActivityStartMode(
+                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+            );
+            if (Build.VERSION.SDK_INT >= 35) {
+                try {
+                    Method creatorMethod = ActivityOptions.class.getMethod(
+                        "setPendingIntentCreatorBackgroundActivityStartMode", int.class
+                    );
+                    creatorMethod.invoke(options, ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+                } catch (Exception ignored) {}
+            }
+            return options.toBundle();
+        }
+        return null;
     }
 
     private String saveBase64ToFile(Context context, String id, String safeName, String soundName, String base64Data) {
